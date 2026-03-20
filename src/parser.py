@@ -41,7 +41,7 @@ class Block():
     root:"Block"
     current_line:str
     reread_line:bool
-    is_containter:bool = True # for block-quotes and lists
+    is_containter:bool = False # for block-quotes and lists
     parse_verbatim:bool = False # for code and HTML blocks
 
     def __init__(self,parent:"Block|None") -> None:
@@ -54,7 +54,9 @@ class Block():
 
             self.parent.children.append(self) # add child to parent
             self.parent.open_child = self # set onself as the open child
-
+        else:
+            # for the root:
+            self.is_containter = True
         self.children:list["Block"] = []
         self.open_child:"Block|None" = None
 
@@ -163,19 +165,24 @@ class Block():
         if self.is_block_quote_block():
             return Block_quote(self)
         
-        # list block:
-        if self.is_list_start():
-            return List_Block(self) # LEAVE LISTS FOR LATER!
+        
         
         
 
-        if self.is_Setext_heading(): # takes precidence over thematic break
+        if self.is_Setext_heading(): # takes precedence over thematic break
             # Setext should replace previous paragraph
             warn("SETEXT NOT IMPLEMENTED YET!")
             pass
 
-        if self.is_thematic_break():
+        if self.is_thematic_break(): # takes precedence over lists
             return Thematic_break(self)
+
+        # list block:
+        if m := self.is_list_start():
+            return List_Block(self, m)
+        
+        if m := self.is_list_item():
+            return List_item(self,m)
         
         if i := self.is_ATX_heading():
             return ATX_heading(self, i)
@@ -229,6 +236,19 @@ class Block():
         return False
 
         raise NotImplementedError()
+
+    def is_list_item(self)-<str:
+        '''is the next line a list item
+        list items are indicated by a bullet list marker `-`, `+`, or `*`,
+        or by an ordered list marker, which is a sequence of 1-9 digits followed by `.` or `)`
+        returns marker including digits if true, zero if false'''
+
+        # bullet:
+        if c := Block.current_line[0] in ('-','+','*'):
+            # TODO
+
+
+
 
     def is_thematic_break(self)->bool:
         '''is the next line a thematic break,
@@ -418,8 +438,6 @@ class List_item(Block):
 
 class Thematic_break(Block):
 
-    is_containter:bool = False
-
     def __init__(self, parent: Block) -> None:
         super().__init__(parent)
         self.open = False # thematic breaks don't have content
@@ -435,8 +453,6 @@ class Thematic_break(Block):
 
 
 class ATX_heading(Block):
-
-    is_containter:bool = False
 
     def __init__(self, parent: Block, level:int) -> None:
         super().__init__(parent)
@@ -454,7 +470,6 @@ class ATX_heading(Block):
 
 class Indented_code_block(Block):
 
-    is_containter:bool = False
     parse_verbatim:bool = True
 
     def can_continue(self) -> bool:
@@ -465,11 +480,14 @@ class Indented_code_block(Block):
         self.contents += content
 
     def realize(self) -> str:
-        return "<pre><code>" + self.contents + "</code></pre>" if self.contents[-1] == '\n' else "\n</code></pre>"
+
+        # trim empty lines: (should only trim start and end lines)
+        l = '\n'.join(filter(None,self.contents.split('\n'))) 
+
+        return "<pre><code>" + l + ("</code></pre>" if l[-1] == '\n' else "\n</code></pre>")
 
 class Fenced_code_block(Block):
 
-    is_containter:bool = False
     parse_verbatim:bool = True
 
     def __init__(self, parent: Block, delimiter:str) -> None:
@@ -493,7 +511,6 @@ class Fenced_code_block(Block):
 
 class HTML_block(Block):
 
-    is_containter:bool = False
     parse_verbatim:bool = True
     
     def __init__(self, parent: Block, type:int) -> None:
@@ -549,8 +566,6 @@ class HTML_block(Block):
 
 
 class Paragraph(Block):
-
-    is_containter:bool = False
     
     def can_continue(self) -> bool:
         if Block.current_line.strip() == "": return False
