@@ -34,4 +34,6 @@ def test_check(specs):
 
 if __name__ == "__main__":
 
-    load_data()
+    # test individual test:
+    id = 227
+    test_check(spec[id-1])

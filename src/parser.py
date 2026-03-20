@@ -41,13 +41,17 @@ class Block():
     root:"Block"
     current_line:str
     reread_line:bool
+    is_containter:bool = False # for block-quotes and lists
+    parse_verbatim:bool = False # for code and HTML blocks
 
     def __init__(self,parent:"Block|None") -> None:
         self.contents:str = ""
-        self.open:bool = True # always open to begin with
+        self.open:bool = True # blocks are open unless otherwise specified
+        
         
         if not parent is None:
             self.parent:"Block" = parent
+            
             self.parent.children.append(self) # add child to parent
 
         self.children:list["Block"] = []
@@ -74,40 +78,65 @@ class Block():
 
         if not Block.reread_line: # to deal with blocks that don't use the line
             Block.current_line = Block.input.readline()
+        else: Block.reread_line = False # reset
 
-        if Block.current_line == "": return False
+        if Block.current_line == "": return False # EOF condition
 
 
         # get all open blocks, in ascending order (can be improved)
-        open_blocks:list["Block"] = []
+        considered_blocks:list["Block"] = []
         prospective = Block.root.get_open_child()
         while prospective != Block.root:
-            open_blocks.append(prospective)
+            considered_blocks.append(prospective)
             prospective = prospective.parent
 
-        # check if block is matched (top down):
+        considered_blocks.append(Block.root)
+
+        # check if block is matched (start looking from top down):
         block_matched = []
-        for block in open_blocks[::-1]:
+        for block in considered_blocks[::-1]:
             block_matched.append(block.can_continue()) # removes continuation markers
         
-        # check for new block start:
-        if not ((new_block := open_blocks[-1].check_for_new_block()) is None):
-            # we have a new block, close all unmatched
-            lowest_open = None
-            for i in range(len(open_blocks)):
-                open_blocks[i].open = block_matched[i] # close unmatched blocks
-                if block_matched[i]:
-                    lowest_open = open_blocks[i] # so we know
-            lowest_open = new_block
-        
-        
-        else: # else we keep block open (lazy continuation)
-            lowest_open = open_blocks[-1]
-        
-        # add remaining contents to lowest open block:
-        lowest_open.contents += Block.current_line
-        return True;
+        # invert block matched to fit considered blocks (ascending):
+        block_matched = block_matched[::-1]
 
+        # create new block if applicable ( and redo that if it was a containter):
+        while (not (new_block := considered_blocks[0].check_for_new_block()) is None):
+            if not new_block.is_containter: break # leaf, keep going
+            # else: add to list and go again
+            considered_blocks.insert(0, new_block)
+        
+        
+        if not new_block is None:
+
+            # close all not-prospective blocks:
+            for i in range(len(block_matched)):
+                if not block_matched[i]:
+                    considered_blocks[i].open = False
+
+            # add this block to consideration:
+            considered_blocks.insert(0, new_block)
+
+        # now, find lowest open block and add contents to it:
+
+        for b in considered_blocks:
+            if b.open:
+                b.add_content(Block.current_line)
+                return True
+
+        return True # this should never be reached
+
+    def add_content(self,content:str):
+        '''adds content to block. if block that is a leaf, i.e. paragraph, code block etc. then add to content.
+        if container of blocks, add a new paragraph (default)'''
+        Paragraph(self).add_content(content)
+
+    def realize(self)->str:
+        '''convert structure to HTML, for root this means adding every child together'''
+        res = ""
+        for child in self.children:
+            res += child.realize() + "\n"
+        return res
 
 
 
@@ -126,8 +155,9 @@ class Block():
 
         
     def can_continue(self)->bool:
-        '''checks if block can continue on next line, if it can it consumes the continuing marker'''
-        raise NotImplementedError("Virtual function")
+        '''checks if block can continue on next line, if it can it consumes the continuing marker.
+        if it doesn't allow lazy lines, it also closes itself if it can't continue'''
+        return True # root can always continue
 
     def check_for_new_block(self)->"Block|None":
         '''
@@ -135,16 +165,23 @@ class Block():
         (for lists, it creates list and list item and returns the list item)
         '''
 
+        # filter out newlines:
+        if Block.current_line.strip() == "": return
+
+        if self.parse_verbatim: return # don't make any new blocks, rest is verbatim
+
+        if self.is_indented_code_block(): # since indents take presidence
+            return Indented_code_block(self)
+
         # block quote block:
         if self.is_block_quote_block():
-            return Block_quote(self) #TODO: add the corresponding leaf as well!
+            return Block_quote(self)
         
         # list block:
         if self.is_list_start():
             return List_Block(self) # LEAVE LISTS FOR LATER!
         
-        if self.is_indented_code_block(): # since indents take presidence
-            return Indented_code_block(self)
+        
 
         if self.is_Setext_heading(): # takes precidence over thematic break
             # Setext should replace previous paragraph
@@ -176,27 +213,26 @@ class Block():
 
     def is_block_quote_block(self)->bool:
         '''is the next line a new block quote.
-        Block quotes defined by 0-3 indents followed by a carat: '>' and a space,
-         or single carat '>' followed by no space'''
+        Block quotes defined by 0-3 indents followed by a carat: '>' and a space or tab,
+         or single carat '>' followed by no space or tab
+         if followed by a tab, that tab represents 3 spaces'''
         warn("BLOCK QUOTE NOT IMPLEMENTED PROPERLY YET!")
-        if self.current_line[0] == '>' and self.current_line[1] != ' ':
-            # consume the marker:
-            self.current_line = self.current_line[1:]
-            return True
+
+
         
-        if self.current_line[0:3] == ' > ':
-            self.current_line = self.current_line[3:]
-            return True
+        # remove whitespace (if it's more indents would have taken it)
+
+        l = Block.current_line.lstrip(' ')
+        if l[0] != '>': return False
         
-        if self.current_line[0:4] == '  > ':
-            self.current_line = self.current_line[4:]
+        # check for space:
+        if l[1] == ' ':
+            Block.current_line = l[2:] # remove one space
             return True
-        
-        if self.current_line[0:5] == '   > ':
-            self.current_line = self.current_line[5:]
+        if l[1] == '\t': # tab replaced by ">   " of which "> " removed
+            Block.current_line = "  " + l[2:]
             return True
-        
-        return False
+        return True # nospace after caret
 
     def is_list_start(self)->bool:
         '''is the next line a new list start
@@ -215,7 +251,7 @@ class Block():
 
         
         # now strip of whitespace and check for characters:
-        l = self.current_line.strip().replace(" ", "").replace("\t", "") # spaces and tabs allowed between
+        l = Block.current_line.strip().replace(" ", "").replace("\t", "") # spaces and tabs allowed between
 
         if not ((c := l[0]) in ('-', '_', '*')):
             return False # not right character
@@ -235,7 +271,7 @@ class Block():
 
         
         # count and strip initial `#`:
-        l = self.current_line.strip()
+        l = Block.current_line.strip()
         llen = len(l)
         idx = 0
         while (idx < llen):
@@ -249,9 +285,9 @@ class Block():
         ls = l.rstrip('#')
         if not ls[-1] in (' ', '\t'):
             # not valid trailing, pass on as content:
-            self.current_line = l[idx:].strip()
+            Block.current_line = l[idx:].strip()
         else:
-            self.current_line = ls[idx:].strip() # remove trailing `#` as well
+            Block.current_line = ls[idx:].strip() # remove trailing `#` as well
         return idx # number of heading
 
     def is_Setext_heading(self)->bool:
@@ -260,7 +296,7 @@ class Block():
         matching `-` or `=` characters, followed by any number of spaces and tabs'''
         
         # now strip of whitespace and check for characters:
-        l = self.current_line.strip().replace(" ", "").replace("\t", "") # spaces and tabs allowed between
+        l = Block.current_line.strip().replace(" ", "").replace("\t", "") # spaces and tabs allowed between
         if not ((c := l[0]) in ('-', '=')):
             return False # not right character
         for c2 in l:
@@ -273,8 +309,13 @@ class Block():
         '''is the next line an indented code block,
         indented code blocks are lines beginning with 4 indentations, followed by arbitrary text'''
 
-        if self.current_line[0:4] in ("    ", '\t'):
-            self.current_line = self.current_line[4:] # strip marker
+        # could probably be done nicer...
+
+        st = Block.current_line[0:4].replace('\t', "    ") # expand all tabs
+
+        if st[0:4] == "    ": # four indents, it's a block
+            # remove the equivalent four from st and rejoin current line
+            Block.current_line = st[4:] + Block.current_line[4:]
             return True
         else: return False
     
@@ -287,7 +328,7 @@ class Block():
         returns the type of delimiter if true else false
         '''
         # get rid of leading whitespace:
-        l = self.current_line.lstrip()
+        l = Block.current_line.lstrip()
 
         if not ((c := l[0]) in ('`', '~')):
             return False # wrong character
@@ -304,7 +345,7 @@ class Block():
         seven conditions start and end a HTML block. this returns the number of the condition fulfilled, or 0 if not.
         contained text should be kept as is. line can also end same place it begins
         Also note! type 7 can't interrupt a paragraph'''
-        l = self.current_line.rstrip()
+        l = Block.current_line.rstrip()
         
         one_tags = ["pre", "script", "style", "textarea"]
         six_tags = ["address", "article", "aside", "base", "basefont", "blockquote", "body", "caption", "center", "col",
@@ -362,19 +403,32 @@ class Block():
         raise NotImplementedError()
 
 
+    def __repr__(self) -> str:
+        return self.__class__.__name__ + ": " + self.contents
+
 
 
 
 class Block_quote(Block):
+
+    is_containter:bool = True
     
     def can_continue(self) -> bool:
         '''same as a new block quote'''
         return self.is_block_quote_block()
     
+    def realize(self) -> str:
+        res = "<blockquote>\n"
+        for child in self.children:
+            res += child.realize() + '\n'
+        return res + "</blockquote>"
+    
 class List_Block(Block):
 
-    def __init__(self, parent: Block) -> None:
-        super().__init__(parent)
+    is_containter:bool = True
+
+class List_item(Block):
+    is_containter:bool = True
 
 class Thematic_break(Block):
 
@@ -384,26 +438,47 @@ class Thematic_break(Block):
 
     def can_continue(self) -> bool:
         return False # thematic breaks are one line only
+    
+    def add_content(self, content: str):
+        raise AttributeError("Can't add to thematic break")
+    
+    def realize(self) -> str:
+        return "<hr/>"
 
 
 class ATX_heading(Block):
 
     def __init__(self, parent: Block, level:int) -> None:
         super().__init__(parent)
-        self.open = False # ATX headings are always closed
         self.level = level
 
     def can_continue(self) -> bool:
+        self.open = False
         return False # ATX headings are one line only
+    
+    def add_content(self, content: str):
+        self.contents += content
+
+    def realize(self) -> str:
+        return f"<h{self.level}>" + inline_parse(self.contents) + f"</h{self.level}>"
 
 class Indented_code_block(Block):
+
+    parse_verbatim:bool = True
 
     def can_continue(self) -> bool:
         '''same as new code block'''
         return self.is_indented_code_block()
+    
+    def add_content(self, content: str):
+        self.contents += content
 
+    def realize(self) -> str:
+        return "<pre><code>" + self.contents + "</code></pre>" if self.contents[-1] == '\n' else "\n</code></pre>"
 
 class Fenced_code_block(Block):
+
+    parse_verbatim:bool = True
 
     def __init__(self, parent: Block, delimiter:str) -> None:
         self.delimiter = delimiter
@@ -413,12 +488,20 @@ class Fenced_code_block(Block):
     def can_continue(self) -> bool:
         '''continues as long as we don't cee the breaking line'''
 
-        if self.current_line.strip() == self.delimiter * 3:
-            self.current_line = "" # Get rid of it from the end result
+        if Block.current_line.strip() == self.delimiter * 3:
+            Block.current_line = "" # Get rid of it from the end result
             return True
         else: return False
-        
+
+    def add_content(self, content: str):
+        self.contents += content
+    
+    def realize(self) -> str:
+        return "<pre><code>" + self.contents + "\n</code></pre>"
+
 class HTML_block(Block):
+
+    parse_verbatim:bool = True
     
     def __init__(self, parent: Block, type:int) -> None:
         self.type = type
@@ -431,51 +514,69 @@ class HTML_block(Block):
 
         if self.type == 1: # closing tag
             for sub in ["</pre>", "</script>", "</style>", "</textarea>"]:
-                if sub in self.current_line.lower():
+                if sub in Block.current_line.lower():
                     # it's the last line:
                     self.open = False
                     return True
         
         if self.type == 2:
-            if "-->" in self.current_line:
+            if "-->" in Block.current_line:
                 # it's the last line:
                 self.open = False
                 return True
         
         if self.type == 3:
-            if "?>" in self.current_line:
+            if "?>" in Block.current_line:
                 # it's the last line:
                 self.open = False
                 return True
                     
         if self.type == 4:
-            if "!>" in self.current_line:
+            if "!>" in Block.current_line:
                 # it's the last line:
                 self.open = False
                 return True
         
         if self.type == 5:
-            if "]]>" in self.current_line:
+            if "]]>" in Block.current_line:
                 # it's the last line:
                 self.open = False
                 return True
         if self.type >= 6: # six or seven
-            if self.current_line.strip() == "":
+            if Block.current_line.strip() == "":
                 return False # no need to add empty line
         
         return True # if not stopped keep on reading
         
-
+    def add_content(self, content: str):
+        self.contents += content
+    
+    def realize(self) -> str:
+        return self.contents
 
 
 class Paragraph(Block):
-    pass
+    
+    def can_continue(self) -> bool:
+        if Block.current_line.strip() == "": return False
+        else: return True
+
+    def add_content(self, content: str):
+        self.contents += content
+
+    def realize(self) -> str:
+        return "<p>" + inline_parse(self.contents) + "</p>"
 
 
+def inline_parse(text:str)->str:
+    '''applies the inline parsing rules, such as emphasis and line breaks'''
 
-
-
-
+    # for now just strip leading and trailing whitespace on each new line
+    l = text.split('\n')
+    s = lambda x: x.strip() 
+    l = map(s,l)
+    l = '\n'.join(filter(None,l))
+    return l
 
 
 def parse_md(text:StringIO)->str:
@@ -488,10 +589,7 @@ def parse_md(text:StringIO)->str:
     Block.init(text)
     while Block.read_line(): pass # read all lines
 
-    
-
-
-    return "".join(text.readlines())
+    return Block.root.realize()
 
 
 
