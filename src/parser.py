@@ -41,7 +41,7 @@ class Block():
     root:"Block"
     current_line:str
     reread_line:bool
-    is_containter:bool = False # for block-quotes and lists
+    is_containter:bool = True # for block-quotes and lists
     parse_verbatim:bool = False # for code and HTML blocks
 
     def __init__(self,parent:"Block|None") -> None:
@@ -51,10 +51,12 @@ class Block():
         
         if not parent is None:
             self.parent:"Block" = parent
-            
+
             self.parent.children.append(self) # add child to parent
+            self.parent.open_child = self # set onself as the open child
 
         self.children:list["Block"] = []
+        self.open_child:"Block|None" = None
 
     @staticmethod
     def init(input:StringIO):
@@ -83,28 +85,27 @@ class Block():
         if Block.current_line == "": return False # EOF condition
 
 
-        # get all open blocks, in ascending order (can be improved)
-        considered_blocks:list["Block"] = []
-        prospective = Block.root.get_open_child()
-        while prospective != Block.root:
-            considered_blocks.append(prospective)
-            prospective = prospective.parent
-
-        considered_blocks.append(Block.root)
+        # get all open blocks, in descending order (can be improved)
+        b = Block.root
+        considered_blocks:list["Block"] = [b]
+        while not (b := b.open_child) is None:
+            considered_blocks.append(b)
 
         # check if block is matched (start looking from top down):
         block_matched = []
-        for block in considered_blocks[::-1]:
+        for block in considered_blocks:
             block_matched.append(block.can_continue()) # removes continuation markers
-        
-        # invert block matched to fit considered blocks (ascending):
-        block_matched = block_matched[::-1]
+
+        # make sure we don't give a child to a paragraph
+        if considered_blocks[-1].is_containter:
+            potential_parent = considered_blocks[-1]
+        else: potential_parent = considered_blocks[-2]
 
         # create new block if applicable ( and redo that if it was a containter):
-        while (not (new_block := considered_blocks[0].check_for_new_block()) is None):
+        while (not (new_block := potential_parent.check_for_new_block()) is None):
             if not new_block.is_containter: break # leaf, keep going
             # else: add to list and go again
-            considered_blocks.insert(0, new_block)
+            considered_blocks.append(new_block)
         
         
         if not new_block is None:
@@ -115,11 +116,11 @@ class Block():
                     considered_blocks[i].open = False
 
             # add this block to consideration:
-            considered_blocks.insert(0, new_block)
+            considered_blocks.append(new_block)
 
         # now, find lowest open block and add contents to it:
 
-        for b in considered_blocks:
+        for b in considered_blocks[::-1]:
             if b.open:
                 b.add_content(Block.current_line)
                 return True
@@ -129,7 +130,8 @@ class Block():
     def add_content(self,content:str):
         '''adds content to block. if block that is a leaf, i.e. paragraph, code block etc. then add to content.
         if container of blocks, add a new paragraph (default)'''
-        Paragraph(self).add_content(content)
+        if not content.strip() == "": # skip empty lines
+            Paragraph(self).add_content(content)
 
     def realize(self)->str:
         '''convert structure to HTML, for root this means adding every child together'''
@@ -137,22 +139,6 @@ class Block():
         for child in self.children:
             res += child.realize() + "\n"
         return res
-
-
-
-    def get_open_child(self)->"Block":
-        '''parse the tree to find last open child'''
-
-        if len(self.children) == 0:
-            return self # this is last block
-        # else:
-        # iterate backwards through children:
-        for child in self.children[::-1]:
-            if child.open:
-                return child.get_open_child()
-        else:
-            raise LookupError("Could not find open child")
-
         
     def can_continue(self)->bool:
         '''checks if block can continue on next line, if it can it consumes the continuing marker.
@@ -432,6 +418,8 @@ class List_item(Block):
 
 class Thematic_break(Block):
 
+    is_containter:bool = False
+
     def __init__(self, parent: Block) -> None:
         super().__init__(parent)
         self.open = False # thematic breaks don't have content
@@ -447,6 +435,8 @@ class Thematic_break(Block):
 
 
 class ATX_heading(Block):
+
+    is_containter:bool = False
 
     def __init__(self, parent: Block, level:int) -> None:
         super().__init__(parent)
@@ -464,6 +454,7 @@ class ATX_heading(Block):
 
 class Indented_code_block(Block):
 
+    is_containter:bool = False
     parse_verbatim:bool = True
 
     def can_continue(self) -> bool:
@@ -478,6 +469,7 @@ class Indented_code_block(Block):
 
 class Fenced_code_block(Block):
 
+    is_containter:bool = False
     parse_verbatim:bool = True
 
     def __init__(self, parent: Block, delimiter:str) -> None:
@@ -501,6 +493,7 @@ class Fenced_code_block(Block):
 
 class HTML_block(Block):
 
+    is_containter:bool = False
     parse_verbatim:bool = True
     
     def __init__(self, parent: Block, type:int) -> None:
@@ -556,6 +549,8 @@ class HTML_block(Block):
 
 
 class Paragraph(Block):
+
+    is_containter:bool = False
     
     def can_continue(self) -> bool:
         if Block.current_line.strip() == "": return False
