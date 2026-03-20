@@ -7,6 +7,7 @@ sys.path.append(directory)
 
 from src.parser import parse_md
 import json
+from io import StringIO
 import pytest
 
 
@@ -24,7 +25,7 @@ spec = load_data()
 @pytest.mark.parametrize('specs', spec)
 def test_check(specs):
 
-    md:str = specs['markdown']
+    md = StringIO(specs['markdown'])
     html:str = specs['html']
     guess = parse_md(md)
     assert guess.strip() == html.strip()
