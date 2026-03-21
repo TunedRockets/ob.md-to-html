@@ -33,7 +33,6 @@ there is also the LaTeX/KaTeX/MathJax blocks, which deserve attention
 
 from io import StringIO
 from warnings import warn
-import re
 
 class Block():
 
@@ -98,17 +97,17 @@ class Block():
         for block in considered_blocks:
             block_matched.append(block.can_continue()) # removes continuation markers
 
-        # make sure we don't give a child to a paragraph
-        if considered_blocks[-1].is_containter:
-            potential_parent = considered_blocks[-1]
-        else: potential_parent = considered_blocks[-2]
+        # at this point we can pretend to be at base level        
 
         # create new block if applicable ( and redo that if it was a containter):
-        while (not (new_block := potential_parent.check_for_new_block()) is None):
-            if not new_block.is_containter: break # leaf, keep going
+        while (not (new_block := considered_blocks[-1].check_for_new_block()) is None):
+            if not new_block.is_containter: break # leaf, end loop
             # else: add to list and go again
             considered_blocks.append(new_block)
         
+        # some block eat the line without needing it added:
+        if type(new_block) in (Thematic_break, Setext_heading):
+            return True
         
         if not new_block is None:
 
@@ -169,20 +168,24 @@ class Block():
         
         
 
-        if self.is_Setext_heading(): # takes precedence over thematic break
-            # Setext should replace previous paragraph
-            warn("SETEXT NOT IMPLEMENTED YET!")
-            pass
+        if c := self.is_Setext_heading(): # takes precedence over thematic break
+            # Setext should replace previous paragraph (done in constructor)
+            
+            return Setext_heading(self,c)
 
         if self.is_thematic_break(): # takes precedence over lists
             return Thematic_break(self)
 
-        # list block:
-        if m := self.is_list_start():
-            return List_Block(self, m)
-        
+        # list block:        
         if m := self.is_list_item():
-            return List_item(self,m)
+            # now figure out if new block or not
+            if isinstance(self, List_Block) and self.marker_belongs(m):
+                # same list, keep going
+                return List_item(self,m)
+            else:
+                # new list, "add" list_block (constructor takes care of proper ordering)
+                b = List_Block(self,m)
+                return List_item(b,m)
         
         if i := self.is_ATX_heading():
             return ATX_heading(self, i)
@@ -209,7 +212,7 @@ class Block():
         Block quotes defined by 0-3 indents followed by a carat: '>' and a space or tab,
          or single carat '>' followed by no space or tab
          if followed by a tab, that tab represents 3 spaces'''
-        warn("BLOCK QUOTE NOT IMPLEMENTED PROPERLY YET!")
+
 
 
         
@@ -225,30 +228,55 @@ class Block():
         if l[1] == '\t': # tab replaced by ">   " of which "> " removed
             Block.current_line = "  " + l[2:]
             return True
+        Block.current_line = l[1:]
         return True # nospace after caret
 
-    def is_list_start(self)->bool:
-        '''is the next line a new list start
-        (note that checking if it continues a list is already done)
-        List is indicated by 
-        '''
-        warn("LIST NOT IMPLEMENTED YET!")
-        return False
-
-        raise NotImplementedError()
-
-    def is_list_item(self)-<str:
+    def is_list_item(self)->str:
         '''is the next line a list item
         list items are indicated by a bullet list marker `-`, `+`, or `*`,
         or by an ordered list marker, which is a sequence of 1-9 digits followed by `.` or `)`
-        returns marker including digits if true, zero if false'''
+        returns marker including digits if true, empty string if false,
+        the return includes extra indentation for catching subserquent blocks'''
+
+        # it allows for 0-3 whitespace before, so:
+        l = Block.current_line.lstrip()
 
         # bullet:
-        if c := Block.current_line[0] in ('-','+','*'):
-            # TODO
-
-
-
+        if (c := l[0]) in ('-','+','*'):
+            # figure out how much extra indentation:
+            i = l[1:6]
+            n_spaces = len(i) - len(i.lstrip())
+            if n_spaces == 5:
+                # that's code block, not extra indentation
+                # remove marker
+                Block.current_line = l[2:]
+                return c
+            # otherwise pass that on as part of marker:
+            if n_spaces > 0:
+                # remove marker
+                Block.current_line = l[1 + n_spaces:]
+                return c + ' ' * n_spaces
+            # otherwise there's not enough spaces, it's not a list
+            return ''
+            
+        # ordered:
+        for d in ('.', ')'):
+            n, c, _ = l.partition(d)
+            if n.isnumeric() and len(n) < 10:
+                # valid number, and a dot, check for spacing:
+                i = l[len(n)+1:len(n)+6]
+                n_spaces = len(i) - len(i.lstrip())
+                if n_spaces == 5:
+                    # that's code block, not extra indentation
+                    Block.current_line = l[len(n) + 2:]
+                    return n + c
+                # otherwise pass that on as part of marker:
+                if n_spaces > 0:
+                    Block.current_line = l[len(n) + 1 + n_spaces:]
+                    return n + c + ' ' * n_spaces
+                # otherwise there's not enough spaces, it's not a list
+                return ''
+        return ''
 
     def is_thematic_break(self)->bool:
         '''is the next line a thematic break,
@@ -265,7 +293,10 @@ class Block():
             if c2 != c:
                 return False # other kind of character
         else:
-            return True # matches
+            # ensure enough characters:
+            if l.count(c) >= 3:
+                return True # matches
+            else: return False
 
     def is_ATX_heading(self)->int:
         '''is the next line an ATX heading,
@@ -285,6 +316,9 @@ class Block():
             else: idx += 1
         if idx > 6: return 0 # too many
         if idx == 0: return 0 # too few
+        if idx == llen: 
+            Block.current_line = ''
+            return idx # no title heading
         if l[idx] != ' ': return 0 # no space after `#` sequence
 
         # valid heading, strip trailing `#` and whitespace
@@ -296,20 +330,25 @@ class Block():
             Block.current_line = ls[idx:].strip() # remove trailing `#` as well
         return idx # number of heading
 
-    def is_Setext_heading(self)->bool:
+    def is_Setext_heading(self)->str:
         '''is the next line an Setext heading,
-        Setext heading indicators are up to three spaces of indentation, followed by 3 or more 
-        matching `-` or `=` characters, followed by any number of spaces and tabs'''
+        Setext heading indicators are up to three spaces of indentation, followed by 1 or more 
+        matching `-` or `=` characters, followed by any number of spaces and tabs
+        returns character if true and empty string if false'''
+
+        # first check if it's a paragraph before this
+        if not isinstance(self.open_child, Paragraph):
+            return ''
         
         # now strip of whitespace and check for characters:
         l = Block.current_line.strip().replace(" ", "").replace("\t", "") # spaces and tabs allowed between
         if not ((c := l[0]) in ('-', '=')):
-            return False # not right character
+            return '' # not right character
         for c2 in l:
             if c2 != c:
-                return False # other kind of character
+                return '' # other kind of character
         else:
-            return True # matches
+            return c # matches
 
     def is_indented_code_block(self)->bool:
         '''is the next line an indented code block,
@@ -341,8 +380,11 @@ class Block():
         if not (l[0:3] == c+c+c):
             return False # doesn't match pattern
 
-        if '`' in l[3:]: return False # not allowed in info string
+        if '`' in l[3:]: return False # not allowed in info string (for inline see inline parser)
         if c == '~' and '~' in l[3:]: return False # --||--
+
+        # it's true so remove the actual fence
+        Block.current_line = l[3:]
 
         return c
     
@@ -431,9 +473,78 @@ class Block_quote(Block):
     
 class List_Block(Block):
 
+    def __init__(self, parent: Block | None, marker:str) -> None:
+
+        # make sure we're not nesting lists without list item between
+        if isinstance(parent, List_Block):
+            parent = parent.parent
+        
+        super().__init__(parent)
+        self.marker = marker
+    
+    def marker_belongs(self, m:str)-> bool:
+        '''check if a marker belongs to this list'''
+
+        # bullets:
+        if self.marker[0] in ('-','+','*'):
+            # just check equality:
+            return self.marker == m
+        # ordered (remove value first)
+        n,s,m = m.partition(' ')
+        m = n[-1] + s + m # get rid of number
+        n,s,my_m = self.marker.partition(' ')
+        my_m = n[-1] + s + my_m
+        return my_m == m
+    
+    def can_continue(self) -> bool:
+        '''If next line can continue as list item, or is new list item, then we can continue.
+        hot to check this without spoiling the line?'''
+        #TODO:
+        return True
+
+    def realize(self) -> str:
+        res = "<ul>\n" if (self.marker[0] in ('-','+','*')) else "<ol>\n"
+        for child in self.children:
+            res += child.realize() + '\n'
+        return res + "</ul>" if (self.marker[0] in ('-','+','*')) else "</ol>"
+
     is_containter:bool = True
 
 class List_item(Block):
+
+    def __init__(self, parent: Block | None, marker:str) -> None:
+        super().__init__(parent)
+        self.marker = marker
+
+
+    def can_continue(self) -> bool:
+        '''to continue the list needs the right number of indents,
+        number of indents is equal to the same column (after all other markers are removed)'''
+
+
+        # expand tabs and get number of spaces:
+        l =Block.current_line.replace('\t', '    ')
+        n_space = len(l) - len(l.lstrip())
+        req_space = len(self.marker)
+        if n_space > req_space:
+            # clean up marker:
+            Block.current_line = l[req_space:]
+            return True
+        return False 
+    
+    def realize(self) -> str:
+
+        # unpack paragraph if only content:
+        if len(self.children) == 1 and isinstance(self.open_child, Paragraph):
+            return "<li>" + inline_parse(self.open_child.contents) + "</li>"
+
+
+        res = "<li>\n"
+        for child in self.children:
+            res += child.realize() + '\n'
+        return res + "</li>"
+
+
     is_containter:bool = True
 
 class Thematic_break(Block):
@@ -449,7 +560,7 @@ class Thematic_break(Block):
         raise AttributeError("Can't add to thematic break")
     
     def realize(self) -> str:
-        return "<hr/>"
+        return "<hr />"
 
 
 class ATX_heading(Block):
@@ -467,6 +578,29 @@ class ATX_heading(Block):
 
     def realize(self) -> str:
         return f"<h{self.level}>" + inline_parse(self.contents) + f"</h{self.level}>"
+
+class Setext_heading(Block):
+
+    def __init__(self, parent: Block, c:str) -> None:
+
+        # check level:
+        self.level = 1 if c == '=' else 2
+
+        # grab paragraph as content
+        p = parent.open_child # type:ignore
+        self.contents = p.contents # type: ignore
+        # delete paragraph:
+        parent.children.remove(p) # type:ignore
+        del(p)
+        super().__init__(parent)
+
+    def can_continue(self) -> bool:
+        self.open = False
+        return False # Setext are closed one created
+    
+    def realize(self) -> str:
+        return f"<h{self.level}>" + inline_parse(self.contents) + f"</h{self.level}>"
+
 
 class Indented_code_block(Block):
 
@@ -507,7 +641,13 @@ class Fenced_code_block(Block):
         self.contents += content
     
     def realize(self) -> str:
-        return "<pre><code>" + self.contents + "\n</code></pre>"
+
+        s = self.contents.split('\n')
+        info = s.pop(0)
+        self.contents = '\n'.join(filter(None,s)) # without first line and filtered
+        info_s = (' class="language-' + info.split(' ')[0] + '"') if len(info) > 0 else ""
+
+        return "<pre><code"+ info_s + ">" + self.contents + "\n</code></pre>"
 
 class HTML_block(Block):
 
@@ -568,7 +708,9 @@ class HTML_block(Block):
 class Paragraph(Block):
     
     def can_continue(self) -> bool:
-        if Block.current_line.strip() == "": return False
+        if Block.current_line.strip() == "": 
+            self.open = False # paragraph can't be lazy
+            return False
         else: return True
 
     def add_content(self, content: str):
@@ -579,7 +721,17 @@ class Paragraph(Block):
 
 
 def inline_parse(text:str)->str:
-    '''applies the inline parsing rules, such as emphasis and line breaks'''
+    '''applies the inline parsing rules, such as emphasis and line breaks.
+    inline parsing is sequential so we can do it as a loop'''
+    out = ""
+    for c in text:
+
+        # code spans (including inline fences)
+
+
+        out += c
+
+
 
     # for now just strip leading and trailing whitespace on each new line
     l = text.split('\n')
