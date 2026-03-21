@@ -1,4 +1,7 @@
-
-s = "123"
-
-print(s.count("1", 0, 5))
+import re
+s = ""
+NAME_PATTERN = r"[abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234567890-]+"
+if re.fullmatch(NAME_PATTERN, s):
+    print('yes')
+else:
+    print('no')

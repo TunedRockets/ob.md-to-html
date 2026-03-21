@@ -27,7 +27,7 @@ def test_check(specs):
 
     md = StringIO(specs['markdown'])
     html:str = specs['html']
-    guess = parse_md(md)
+    guess = parse_md(md) # 
     assert guess.strip() == html.strip()
 
 
@@ -35,7 +35,7 @@ def test_check(specs):
 if __name__ == "__main__":
 
     # test individual test:
-    id = 119
+    id = 638 # id in pytest is one less than this
     test_check(spec[id-1])
 
     
