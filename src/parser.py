@@ -175,10 +175,6 @@ class Block():
         if self.is_block_quote_block():
             return Block_quote(self)
         
-        
-        
-        
-
         if c := self.is_Setext_heading(): # takes precedence over thematic break
             # Setext should replace previous paragraph, so call on paragraph parent
             return Setext_heading(self.parent,c)
@@ -235,8 +231,11 @@ class Block():
         if l[1] == ' ':
             Block.current_line = l[2:] # remove one space
             return True
-        if l[1] == '\t': # tab replaced by ">   " of which "> " removed
-            Block.current_line = "  " + l[2:]
+        if l[1] == '\t': # tab replaced by ">   " of which "> " removed (from the leftmost tab)
+            l = l[-1:0:-1]
+            l = l.replace('\t', '  ',1) # reverse l, replace, re-reverse
+            l = l[::-1]
+            Block.current_line = l
             return True
         Block.current_line = l[1:]
         return True # nospace after caret
@@ -252,7 +251,7 @@ class Block():
         l = Block.current_line.lstrip(' ')
         tabbed = (l[1] == "\t") # tabs assume a spacing of 1
         l = l.replace('\t', '   ',1) # expand tabs (including the '- ' for the first one)
-        l = l.replace('\t', '    ')
+        # l = l.replace('\t', '    ')
 
 
         if (c := l[0]) in ('-','+','*'):
@@ -363,13 +362,18 @@ class Block():
         '''is the next line an indented code block,
         indented code blocks are lines beginning with 4 indentations, followed by arbitrary text'''
 
-        # could probably be done nicer...
+        # if tab is involved, spaces before tabs are not carried through
+        st = Block.current_line[0:4] # relevant part
+        if st == '    ': # easiest option
+            Block.current_line = Block.current_line[4:] # trim spaces
+            return True
+        elif '\t' in st:
+            # keep spaces after tab
+            sp = st.split('\t')
+            if sp[0].lstrip(' ') != '': return False # has something other than tabs
 
-        st = Block.current_line[0:4].replace('\t', "    ") # expand all tabs
-
-        if st[0:4] == "    ": # four indents, it's a block
-            # remove the equivalent four from st and rejoin current line
-            Block.current_line = st[4:] + Block.current_line[4:]
+            st = "".join(sp[1:]) # after first tab
+            Block.current_line = st + Block.current_line[4:]
             return True
         else: return False
     
@@ -404,7 +408,7 @@ class Block():
         Also note! type 7 can't interrupt a paragraph'''
         l = Block.current_line.rstrip()
         
-        one_tags = ["pre", "script", "style", "textarea"]
+        one_tags = ["<pre", "<script", "<style", "<textarea"]
         six_tags = ["address", "article", "aside", "base", "basefont", "blockquote", "body", "caption", "center", "col",
                     "colgroup", "dd", "details", "dialog", "dir", "div", "dl", "dt", "fieldset", "figcaption", "figure",
                     "footer", "form", "frame", "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head", "header", "hr",
@@ -412,7 +416,13 @@ class Block():
                     "optgroup", "option", "p", "param", "search", "section", "summary", "table", "tbody", "td", "tfoot",
                     "th", "thead", "title", "tr", "track", "ul"]
         six_tags.extend(['/' + s for s in six_tags]) # closing tags allowed as well
+        six_tags.extend([s + '/' for s in six_tags]) # and extra closing /
         
+        # one: start of area
+        # DOESN"T  WORK BECAUSE \n IS ALWAYS LAST, HAVE TO CHECK BEFORE THAT IS SPACE!!! TODO
+        if l[-1] in (' ', '\t', '>', '\n') and l[:-1].lower() in one_tags:
+            return 1
+
         # two: HTML comment
         if l[0:4] == "<!--":
             return 2
@@ -429,24 +439,18 @@ class Block():
         if l[0:9] == "<![CDATA[":
             return 5
         
+        # six: known tag
+        if l[0] == "<" and l[-1] in (' ', '\t', '>', '\n'):
+            if l[1:-1] in six_tags:
+                return 6
         
-        # one, six, seven: tag
-        if l[0] == "<":
-            tagname = l.split()[0][1:] # possible tagname including /
-            
-            # for one and six, check if tag is valid: (EOL or space,tab, or `>` after tag)
-            if len(tagname) + 1 >= len(l) or l[len(tagname) + 1] in (' ', '\t', '>'):
-                # valid tag can be 1-6
-                if tagname in one_tags: return 1
-                if tagname in six_tags: return 6
-
-            # now if anything it's 7, which can't interrupt paragraph, so:
+        
+            # seven: unknown tag
+            # 7 can't interrupt paragraph, so:
             if isinstance(self, Paragraph): return 0
 
-            # for now just assume any tag is correct, ideally 7 should check
-            # that the tag is correct, but for now just assume it is
-            # TODO
-            return 7
+            if is_HTML_tag(l): # needs to be standalone tag
+                return 7
         
         return 0 
 
@@ -666,6 +670,10 @@ class HTML_block(Block):
         self.type = type
         super().__init__(parent)
 
+        # check if should close automatically:
+        if not self.can_continue():
+            self.open = False
+
 
     def can_continue(self) -> bool:
         '''7 different conditions, woah.
@@ -727,6 +735,122 @@ class Paragraph(Block):
 
     def realize(self) -> str: # strip 0 to 3 spaces before
         return "<p>" + inline_parse(self.contents.lstrip(' ')) + "</p>"
+
+
+def is_HTML_tag(tag:str)->bool:
+    '''checks if a tag (with opening brackets) is a valid html tag.
+    more properly, it checks that:
+    - line begins with `<` or `</`
+    - followed by a tag-name
+    - followed by 0 or more attributes, with optional attribute values
+    - followed by optionally `>`
+    - each separated by spaces, tabs, and up to one line ending'''
+
+    # strip end tag:
+    tag = tag.rstrip('>')
+    if tag[-1] == '/' and tag[-2] in (' ', '\t', '\n'):
+        tag = tag[:-1]
+
+
+    # start with line beginning:
+    sp = tag.split(' ')
+    name = sp[0]
+    if name[0] != '<': return False
+    if name[1] == '/':
+        # closing tag, that's easy
+        if tag.rstrip()[-1] != '>': return False
+        # otherwise just check that name is valid name
+
+        if is_HTML_tag_name(name[2:].rstrip('>')):
+            return True
+        else:
+            return False
+    # else:
+    #check valid name:
+    if not is_HTML_tag_name(name[1:].rstrip('>').rstrip('/')): return False
+
+    # now go through and make sure attributes are valid:
+    l = "".join(sp[1:]).lstrip() # currently not checking newline amount
+
+    # stripping end:
+    l = l.strip('>').strip('/')
+
+    mode_in = '' # 'a' : attribute name, 'u' : unquoted, '"' : single quoted, ''' double quoted
+    eat = True
+    for c in l:
+        if eat:
+            if c in (' ', '\t', '\n'): continue
+            else: eat = False # stop eating
+        match mode_in:
+            case 's': # start
+                if not re.fullmatch(ATTRIBUTE_START, c): return False # invalid start
+                mode_in = 'a'
+            
+            case 'a': # inside attribute name
+                if c in ('\n',' ', '\t'):
+                    eat = True
+                    mode_in = '='
+                    continue
+                elif c == '=':
+                    eat = True
+                    mode_in = 'r'
+                    continue
+                else:
+                    if not re.fullmatch(ATTRIBUTE_START, c): return False # invalid start
+                    continue
+            case '=': # looking for equals or new attribute
+                if c != '=': # new attribute
+                    if not re.fullmatch(ATTRIBUTE_START, c): return False # invalid start
+                    mode_in = 'a'
+                else:
+                    eat = True 
+                    mode_in = 'r'
+                    continue
+            case 'r': # looking to start value
+                if c == '"':
+                    mode_in = '"'
+                    continue
+                elif c == "'":
+                    mode_in = "'"
+                    continue
+                elif c in UVALUE_SET: return False # invalid start
+                else:
+                    mode_in = 'u'
+                    continue
+            case '"': # continue until other quote, anything goes
+                if c == '"':
+                    eat=True
+                    mode_in = 's'
+                continue
+            case "'": # continue until other quote, anything goes
+                if c == "'":
+                    eat=True
+                    mode_in = 's'
+                continue
+            case 'u': # continue until space or invalid
+                if c in UVALUE_SET: return False
+                elif c in ('\n',' ', '\t'):
+                    eat = True
+                    mode_in = 's'
+    # if you made it through all that, you're a valid tag
+    return True           
+
+
+
+
+
+ATTRIBUTE_START = r"[a-zA-Z_.:-]+"
+ATTRIBUTE_PATTERN = r"[a-zA-Z_:]"
+UVALUE_SET = ('"', "'", '=', '<', '>', '`')
+NAME_START = r"[a-zA-Z]"
+NAME_PATTERN = r"[a-zA-Z0-9-]+"
+def is_HTML_tag_name(name:str)->bool:
+    '''checks if string is valid HTML tag-name'''
+    if not re.fullmatch(NAME_PATTERN, name): return False
+    if not re.fullmatch(NAME_START, name[0]): return False
+    return True
+
+ 
 
 
 class fakestream:
@@ -851,7 +975,7 @@ def parse_inline_HTML(stream:fakestream, c:str)->str|bool:
             stream.move(-len(buf))
             return '&lt;'
 
-    if is_valid_tag(buf):
+    if is_HTML_tag('<' + buf + '>'):
         return '<' + buf + '>'
     else:
         stream.move(-len(buf))
@@ -1137,15 +1261,7 @@ def char_counter(s:fakestream, c:str)->int:
     s.move(-1) # go back one
     return tick_len
 
-NAME_PATTERN = r"[abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234567890-]+"
-def is_valid_tag(tag:str)->bool:
 
-    name = tag.split(' ')[0] # first part deliniated by space
-    if not re.fullmatch(NAME_PATTERN, name): return False
-    if not name[0].isalpha(): return False
-
-    #TODO: attributes and closing tags
-    return True   
 
 def parse_md(text:StringIO)->str:
     '''
@@ -1171,8 +1287,7 @@ It is very important to have a model of the atmosphere, it allows you to calcula
 All the below formulae, (and everything is atmospheric aerospace analysis) are based on gravity being constant with height
     
 '''
-    test_str = "code: `code`, cool code: `` cool` ``, space: ` ` tick: `` ` ``\n" \
-    "inline: ```  ``code``  ```"
-    print(inline_parse(test_str))
+    test_str = '</imatag attr="woah" attr2="oh baby" _23 = true\n >'
+    is_HTML_tag(test_str)
     # testcase = StringIO(testcase)
     # print(parse_md(testcase))

@@ -35,7 +35,7 @@ def test_check(specs):
 if __name__ == "__main__":
 
     # test individual test:
-    id = 2 # id in pytest is one less than this
+    id = 615 # id in pytest is one less than this
     test_check(spec[id-1])
 
     
