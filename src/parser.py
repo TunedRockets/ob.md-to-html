@@ -50,8 +50,8 @@ class Block():
     is_containter:bool = False # for block-quotes and lists
     parse_verbatim:bool = False # for code and HTML blocks
 
-    def __init__(self,parent:"Block|None") -> None:
-        self.contents:str = ""
+    def __init__(self,parent:"Block|None", contents:str = "") -> None:
+        self.contents:str = contents
         self.open:bool = True # blocks are open unless otherwise specified
         
         
@@ -180,9 +180,8 @@ class Block():
         
 
         if c := self.is_Setext_heading(): # takes precedence over thematic break
-            # Setext should replace previous paragraph (done in constructor)
-            
-            return Setext_heading(self,c)
+            # Setext should replace previous paragraph, so call on paragraph parent
+            return Setext_heading(self.parent,c)
 
         if self.is_thematic_break(): # takes precedence over lists
             return Thematic_break(self)
@@ -250,13 +249,14 @@ class Block():
         the return includes extra indentation for catching subserquent blocks'''
 
         # it allows for 0-3 whitespace before, so:
-        l = Block.current_line.lstrip()
-        l = l.replace('\t', '   ') # expand tabs (This behaves strangely with the spec)
+        l = Block.current_line.lstrip(' ')
+        l = l.replace('\t', '  ',1) # expand tabs (including the '- ' for the first one)
+        l = l.replace('\t', '    ')
 
 
         if (c := l[0]) in ('-','+','*'):
             # figure out how much extra indentation:
-            n_spaces = len(l[1:]) - len(l[1:].lstrip())
+            n_spaces = len(l[1:]) - len(l[1:].lstrip(' '))
             if n_spaces == 0: return '' # not enough spaces
             n_spaces %= 4 # to remove potential codespaces
             # otherwise pass that on as part of marker:
@@ -272,7 +272,7 @@ class Block():
             if n.isnumeric() and len(n) < 10:
                 # valid number, and a dot, check for spacing:
                 i = l[len(n)+1:len(n)+6]
-                n_spaces = len(i) - len(i.lstrip())
+                n_spaces = len(i) - len(i.lstrip(' '))
                 if n_spaces == 5:
                     # that's code block, not extra indentation
                     Block.current_line = l[len(n) + 2:]
@@ -344,7 +344,7 @@ class Block():
         returns character if true and empty string if false'''
 
         # first check if it's a paragraph before this
-        if not isinstance(self.open_child, Paragraph):
+        if not isinstance(self, Paragraph):
             return ''
         
         # now strip of whitespace and check for characters:
@@ -380,7 +380,7 @@ class Block():
         returns the type of delimiter if true else false
         '''
         # get rid of leading whitespace:
-        l = Block.current_line.lstrip()
+        l = Block.current_line.lstrip(' ')
 
         if not ((c := l[0]) in ('`', '~')):
             return False # wrong character
@@ -531,7 +531,7 @@ class List_item(Block):
 
         # expand tabs and get number of spaces:
         l =Block.current_line.replace('\t', '    ')
-        n_space = len(l) - len(l.lstrip())
+        n_space = len(l) - len(l.lstrip(' '))
         req_space = len(self.marker)
         if n_space > req_space:
             # clean up marker:
@@ -595,11 +595,11 @@ class Setext_heading(Block):
 
         # grab paragraph as content
         p = parent.open_child # type:ignore
-        self.contents = p.contents # type: ignore
+        con = p.contents # type: ignore
         # delete paragraph:
         parent.children.remove(p) # type:ignore
         del(p)
-        super().__init__(parent)
+        super().__init__(parent, con)
 
     def can_continue(self) -> bool:
         self.open = False
@@ -724,7 +724,7 @@ class Paragraph(Block):
         self.contents += content
 
     def realize(self) -> str: # strip 0 to 3 spaces before
-        return "<p>" + inline_parse(self.contents).lstrip() + "</p>"
+        return "<p>" + inline_parse(self.contents.lstrip(' ')) + "</p>"
 
 
 class fakestream:
@@ -749,6 +749,384 @@ class fakestream:
         '''moves index by given amount'''
         self.idx += pos
 
+
+def inline_parse(text:str)->str:
+    '''runs the inline parse on the text, in order to (in order of precedence):
+    - insert code spans
+    - insert emphasis
+    - insert links
+    - insert autolinks
+    - pass through raw HTML
+    - format line breaks
+    - escape characters
+    - convert HTML codes to unicode
+    - replace dangerous characters with HTML codes
+
+    Version 2
+    '''
+
+    out = [""] # improvement over v1, out is a list of strings
+    # better this than a linked list and allows some pointer-like things
+    stream = fakestream(text)
+    
+    while (c := stream.read(1)) != '':
+        
+        if (t := parse_inline_code(stream,c)):
+            out.extend([t, '']) # type:ignore
+            continue
+        
+        if (t := parse_inline_emphasis(stream,out,c)):
+            out.extend([t, '']) # type:ignore
+            continue
+
+        if (t := parse_inline_links(stream,out,c)):
+            out.extend([t, '']) # type:ignore
+            # add new text string after to continue in (leave emphasis as it's own thing)
+            continue
+
+        if (t := parse_inline_HTML(stream,c)):
+            out.extend([t, '']) # type:ignore
+            continue
+        
+        if (t := parse_inline_escape(stream,c)):
+            out[-1] += t # type:ignore
+            continue
+
+        if parse_inline_linebreak(stream, out,c):
+            continue
+
+        if (t := parse_inline_char_ref(stream,c)):
+            out[-1] += t # type:ignore
+            continue
+        
+        # else:
+        out[-1] += HTML_sanitize(c)
+
+    process_emphasis(out, -1)
+    # remove end breaks:
+    if out[-1][-7:] == "<br />\n": out[-1] = out[-1][:-7]
+    # strip end spaces:
+    out[-1] = out[-1].rstrip()
+
+    return ''.join(out)
+
+def parse_inline_code(stream:fakestream, c:str)->str|bool:
+    '''read character, and if it's inline code, returns the resulting string.
+    else returns false and backs up stream'''
+    if c != '`': return False
+
+    # count length of ticks:
+    n = char_counter(stream, '`') + 1
+    # found ticks, read into buffer until similar length found:
+    buf = ''
+    while (d := stream.read(1)) != '':
+        if d != '`':
+            # just insert regular characters (except make newlines to space)
+            buf += (d if d != '\n' else ' ') 
+            continue
+        # else:
+        m = char_counter(stream, '`') + 1 # number of ticks
+        if m == n:
+            # was matching, return buffer and tags
+            return '<code>' + buf + '</code>'
+        else:
+            # just treat tags literally:
+            buf += '`'*m
+            continue
+    # reached EOF, back up and ticks as literal:
+    stream.move(-len(buf) - 1)
+    return '`' * n
+
+def parse_inline_HTML(stream:fakestream, c:str)->str|bool:
+    '''read character, and if it's inline HTML, returns the resulting string.
+    else returns falseand backs up stream'''
+    if c != '<': return False
+    buf = ''
+    while (c2 := stream.read(1)) != '>':
+        buf += c2
+        if c2 == '':
+            # reached EOF, so that's a false
+            stream.move(-len(buf))
+            return '&lt;'
+
+    if is_valid_tag(buf):
+        return '<' + buf + '>'
+    else:
+        stream.move(-len(buf))
+        return '&lt;'
+
+def parse_inline_linebreak(stream:fakestream, out:list[str], c:str)->bool:
+    '''reads linbreak, and if it is figures out if it's soft or hard,
+    then cleans out appropriately'''
+    if c != '\n': return False
+
+
+    # two+ spaces (or backslash, which is handles in escapes) hard break
+    # else soft break
+    if (len(out[-1])>=2 and out[-1][-2:0] == '  ') or (len(out[-1])>=1 and out[-1][-1] == '\t'):
+        # hard:
+        # if we're at EOF then no hard break:
+        if stream.read(1) == '':
+            return True # end treatment will strip spaces
+        else:
+            stream.move(-1) # move back
+            out[-1] = out[-1].rstrip() + '<br />\n'
+    else:
+        # soft break:
+        out[-1] = out[-1].rstrip() + '\n'
+        
+    # get rid of next spaces:
+    while stream.read(1) == ' ': pass
+    stream.move(-1) # move back to read new line
+    return True
+
+def parse_inline_escape(stream:fakestream, c:str)->str|bool:
+    '''reads for escape sequences if found, returns literal character.
+    also deals with dangerous HTML characters'''
+    if c != '\\': return False
+    c = stream.read(1) # get potential escaping character
+    if not c in ('!', '"', '#', '$', '%', '&', "'", '(', ')', '*', '+', ',', '-', '.', '/', ':', ';', '<', '=', '>', '?', '@', '[', '\\', ']', '^', '_', '`', '{', '|', '}', '~', '\n'):
+        # not valid escape, treat as literal
+        # since it can't be beginning something special just pass on literal:
+        return '\\' + c
+    # else:
+    if c == '\n':
+        # special case, back up and add two spaces for the inline break
+
+        # except if at EOF, in which case keep the `\`:
+        if stream.read(1) == '':
+            return '\\'
+        else:
+            stream.move(-2) # for both forward reads
+            return '  '
+    else:
+        return HTML_sanitize(c)
+    
+def parse_inline_char_ref(stream:fakestream, c:str):
+    '''checks if the following is a valid HTML character unicode referece.
+    if yes returns the unicode character, else move back stream
+    and return false'''
+    if c != '&': return False
+    # grab until semicolon:
+    buf = ''
+    while (c1 := stream.read(1)) != ';':
+        if c1 == '':
+            # reached EOF, it's invalid so back up
+            stream.move(-len(buf))
+            return False
+        buf += c1
+    # figure out if it's valid:
+     # is is a numerical code?
+    try:
+        if buf[0] == "#":
+            if buf[1] in ('X', 'x'):
+                # hex value:
+                num = int(buf[2:],16)
+            else:
+                num = int(buf[1:],10)
+            # now convert to unicode (unless zero in which case U+FFFD)
+            if num == 0: 
+                return '\uFFFD'
+            else:
+                return HTML_sanitize(chr(num))
+        # buffer is now content of the id
+        elif '&' + buf + ';' in HTML_entites.keys():
+            return HTML_sanitize(HTML_entites['&' + buf + ';']["characters"])
+        else:
+            # not a HTML reference, go back and add it literally:
+            stream.move(-len(buf) - 1)
+            return False
+    except (ValueError,IndexError):
+        # invalid number code, go back:
+        stream.move(-len(buf) - 1)
+        return False
+
+
+
+delimeter_stack = []
+def parse_inline_emphasis(stream:fakestream, out:list[str], c:str)->str|bool:
+    '''read character, if it starts emphasis, return an emphasis string
+    and add to delimiter stack'''
+    
+    if not c in ('*','_'): return False
+
+    # count:
+    n = char_counter(stream, c) + 1
+
+    # figure direction
+    # left and/or right? (neither and it's just literal)
+    d = 0
+    lor = False
+    fol = stream.read(1)
+    stream.move(-1) # go back to not miss
+    pre = out[-1][-1] if len(out[-1]) != 0 else ''
+    # unicode category (since uni doesn't like none inputs):
+    fol_c = uni.category(fol) if not fol == '' else '  '
+    pre_c = uni.category(pre) if not pre == '' else '  '
+
+    # check wether following and previous are punctuation or whitespace:
+    fol_w = (fol_c == 'Zs' or fol in ('\u0009','\u000A','\u000C','\u000D', ''))
+    pre_w = (pre_c == 'Zs' or pre in ('\u0009','\u000A','\u000C','\u000D', ''))
+    fol_p = (fol_c[0] in ('P','S'))
+    pre_p = (pre_c[0] in ('P','S'))
+
+    # left (opener):
+    if (not fol_w) and ((not fol_p) or (pre_w or pre_p)):
+        d -= 1
+        lor = True
+    #right (closer):
+    if (not pre_w) and ((not pre_p) or (fol_w or fol_p)):
+        d +=1
+        lor = True
+
+    if lor: # add to stack
+        delimeter_stack.append({
+            "type": c,
+            "length": n,
+            "active": True,
+            "dir": d,
+            "idx": len(out) # place in out where it is
+        })
+
+    # return the raw string:
+    return c * n
+
+def parse_inline_links(stream:fakestream,out:list[str], c:str)->str|bool:
+    '''read character, if it starts link, return an emphasis string
+    and add to delimiter stack, if it ends link, do the same'''
+    if not c in ('[','!', ']'): return False
+    
+    # check for `![`:
+    if stream.read(1) == '[':
+        c = '!['
+    else:
+        stream.move(-1)
+        return False # let someone else take it
+    
+    if c in ('[', '!['):
+        # start of link
+        delimeter_stack.append({
+            "type": c,
+            'active':True,
+            "dir": 0, # irrelevant for links
+            "length":0, # ---||---
+            "idx": len(out) # place in out where it is
+        })
+        return c
+    # else, close the link
+    for delim in delimeter_stack[::-1]:
+        if delim['type'] not in ('[', '!['): continue
+        # found one!
+        if not delim['active']:
+            # inactive, remove and insert literal
+            delimeter_stack.remove(delim)
+            return c
+        # now we get to the complicated stuff!
+        # check if valid link, valid link is:
+        # - link text (already know is correct)
+        # - link destination, text between `<>` with no `\n` or unescaped `<>`
+        #   or nonempty sequence of chars, not including ASCII control chars, or space
+        #   and only parentheses if they are escaped or make a balanced pair
+        # - link title, delineated by `"`,`'`, or matching `()`,
+        #   including only the delineator if escaped
+        # links thake the form:
+        # [text]( destination title )
+        # with the spaces here allowed to be:
+        # nonzero number of spaces and tabs, and up to one line ending.
+        # this is then translated to:
+        # <a href="destination" title="title">text</a>
+
+        # images work the same, except they use alt instead of title, and 
+        # "an image description may contain links"
+
+        # TODO:
+        # for now, return literal:
+        return c
+
+
+    else:
+        # found none, insert literal:
+        return c
+
+
+
+def process_emphasis(out:list[str], stack_bottom:int = -1):
+    '''Run process emphasis, until we reach indicated stack bottom'''
+    curr_pos = stack_bottom+1
+    openers_bottom = {'*' : stack_bottom, '_' : stack_bottom}
+    global delimeter_stack
+
+    while curr_pos < len(delimeter_stack):
+        # get next closer:
+        curr = delimeter_stack[curr_pos]
+        if curr['dir'] < 0 or (not curr['type'] in ('*','_')):
+            curr_pos += 1
+            continue
+
+        # look back for first matching, staying above bottom:
+        for i in range(curr_pos- max(stack_bottom, openers_bottom[curr['type']])):
+            pot = delimeter_stack[curr_pos-i] # potential opener
+            if not (pot['type'] == curr['type'] and pot['dir']<=0 and pot != curr):
+                continue # doesn't match
+            # found valid one
+            is_strong = len(out[curr['idx']]) >=2 and len(out[pot['idx']]) >=2
+            
+            # add emphasis or strong to nodes between delimeters:
+            if is_strong:
+                out[pot['idx']+1] = '<strong>' + out[pot['idx']+1]
+                out[curr['idx']-1] += '</strong>'
+
+                # remove delimeters from delimeter run:
+                curr['length'] -= 2
+                out[curr['idx']] = curr['type']*curr['length']
+                pot['length'] -= 2
+                out[pot['idx']] = pot['type']*pot['length']
+            else:
+                out[pot['idx']+1] = '<em>' + out[pot['idx']+1]
+                out[curr['idx']-1] += '</em>'
+
+                # remove delimeters from delimeter run:
+                curr['length'] -= 1
+                out[curr['idx']] = curr['type']*curr['length']
+                pot['length'] -= 1
+                out[pot['idx']] = pot['type']*pot['length']
+
+            # remove all delimiters between opener and closer:
+            for j in range(curr_pos-1, curr_pos-i, -1):
+                delimeter_stack.pop(j)
+                curr_pos-=1 # to keep it accurate
+
+            # remove delimeters if they're empty:
+            if pot['length'] == 0:
+                delimeter_stack.remove(pot)
+                curr_pos -=1
+            if curr['length'] == 0:
+                delimeter_stack.remove(curr)
+                # move to next, which automatically happens with curr_pos
+            break
+        else: # none found
+            openers_bottom[curr['type']] = curr_pos -1 # lower bound in future
+            if curr['dir'] != 0:
+                # not opener either, remove it
+                # (which advances curr_pos)
+                delimeter_stack.remove(curr)
+            else:
+                curr_pos += 1
+
+            continue
+
+    # remove delimeters above stack bottom TODO
+    delimeter_stack = delimeter_stack[:stack_bottom+1]
+    return;
+
+def HTML_sanitize(c:str)->str:
+    '''returns a sanitized version of the char as to not use symbols
+    that might break HTML formatting'''
+    HTML_replace = {'"': "&quot;", '&': "&amp;", '<': "&lt;", '>': "&gt;", '\u0000' : '\uFFFD'}
+    if c in HTML_replace.keys():
+        return HTML_replace[c]
+    else: return c
+
 def char_counter(s:fakestream, c:str)->int:
     '''counts length of char run, and sets stream to end of run.'''
     tick_len = 0
@@ -765,259 +1143,7 @@ def is_valid_tag(tag:str)->bool:
     if not name[0].isalpha(): return False
 
     #TODO: attributes and closing tags
-    return True    
-
-delimeter_stack = []
-def handle_link(out:str)->str:
-    '''Handles links by looking in the delimiter stack'''
-    for item in delimeter_stack[::-1]:
-        if not item['type'] in ('[', '!['):
-            continue
-        elif not item['active']:
-            delimeter_stack.remove(item)
-            return ']'
-        # found active delimiter, check if valid link TODO
-        if False:
-            pass
-
-        else: 
-            delimeter_stack.remove(item)
-            return ']'
-    # found nothing:
-    return ']'
-
-def process_emphasis(out:str,stack_bottom:int = -1):
-    '''runs process emphasis, note that higher number is further into the stack'''
-    added_space = 0
-
-
-    curr_pos = stack_bottom+1
-    openers_bottom = {'*' : stack_bottom, '_' : stack_bottom}
-    while True:
-        curr = delimeter_stack[curr_pos]
-        if curr['dir'] < 0 or (not curr['type'] in ('*','_')):
-            curr_pos += 1
-            continue
-        # else: we have a closer
-        # look back for first matching:
-        for i in range(curr_pos - max(stack_bottom, openers_bottom[curr['type']])):
-            pot_opener = delimeter_stack[curr_pos-i]
-            if not pot_opener['type'] == curr['type']:
-                continue # doesn't match
-            # else:
-            
-            # insert in opener:
-            if pot_opener['length'] >= 2 and curr['length'] >= 2:
-                out = out[:pot_opener['place']+added_space] + '<strong>' + out[pot_opener['place']+added_space:]
-                added_space += len('<strong>')
-            else:
-                out = out[:pot_opener['place']+added_space] + '<em>' + out[pot_opener['place']+added_space:]
-                added_space += len('<em>')
-            
-        else:
-            # none found
-            pass
-
-
-def inline_parse(text:str)->str:
-    '''applies the inline parsing rules, such as emphasis and line breaks.
-    inline parsing is sequential so we can do it as a loop'''
-    out = ""
-    stream = fakestream(text)
-    
-    while (c := stream.read(1)) != '':
-
-        # code spans:
-        if c == '`':
-            # count ticks:
-            n = char_counter(stream, '`') + 1
-            # found ticks, read into buffer until similar length found:
-            buf = ''
-            while (m := char_counter(stream, '`')) != n:
-                # insert ticks literally:
-                buf += '`'*m
-                c = stream.read(1)
-                if c == '': break # EOF
-                buf += (c if c != '\n' else ' ') # remove newlines
-            # broken
-            if m == n:
-                # found matching! strip buffer and put in out
-                if len(buf) == buf.count(' '):
-                    # only spaces, pass as is:
-                    out += '<code>' + buf + '</code>'
-                else:
-                    # strip eventual first and last space
-                    fs = (buf[0] != ' ')
-                    ls = (buf[-1] != ' ')
-                    out += '<code>' + buf[0]*fs + buf[1:-1] + buf[-1]*ls + '</code>'
-            else:
-                # ran into EOF, back up and insert literal backticks
-                stream.move(-len(buf) - 1)
-                out += '`' * n
-
-            continue # in either case start parsing again
-
-        # emphasis, links, and images:
-        # using the common mark process, we enter these as literals now,
-        # but mark them in the delimeter stack (process later) TODO
-        if c in ('*', '_'): # emphasis
-            # how long run?
-            length = char_counter(stream, c) + 1
-            # left and/or right? (neither and it's just literal)
-            d = 0
-            lor = False
-            fol = stream.read(1)
-            # left:
-            if not (uni.category(fol) == 'Zs' or fol in ('\u0009','\u000A','\u000C','\u000D')):
-                if not uni.category(fol) in ('P','S') or (uni.category(out[-1]) in ('Zs', 'P', 'S') or out[-1] in ('\u0009','\u000A','\u000C','\u000D')):
-                    d -=1
-                    lor = True
-            
-            # right:
-            if not (len(out) == 0 or uni.category(out[-1]) == 'Zs' or out[-1] in ('\u0009','\u000A','\u000C','\u000D')):
-                if not uni.category(out[-1]) in ('P','S') or (uni.category(fol) in ('Zs', 'P', 'S') or fol in ('\u0009','\u000A','\u000C','\u000D')):
-                    d +=1
-                    lor = True
-            if lor: # add to stack
-                # now add to stack:
-                delimeter_stack.append({
-                    "place": len(out),
-                    "type": c,
-                    "length": length,
-                    "active": True,
-                    "dir": d
-                })
-
-            # add literals and back up stream:
-            stream.move(-1)
-            out += c * length
-            continue
-        elif c in ('[', '!['): # TODO: integrate wiki-links
-            delimeter_stack.append({
-                    "place": len(out),
-                    "type": c,
-                    "length": len(c),
-                    "active": True,
-                    "dir": -1 # always for links
-                })
-            out += c
-            continue
-        elif c == ']':
-            # out += handle_link(out)
-            pass
-
-
-
-        # raw HTML 
-        # on `<`, find `>` and check if contents are valid html tag (with attributes)
-        # if so, render verbatim, else, roll back stream and treat as literal `<`
-        if c == '<':
-            buf = ''
-            while (c2 := stream.read(1)) != '>':
-                buf += c2
-                if c2 == '':
-                    # reached EOF, so that's a false
-                    stream.move(-len(buf)-1)
-                    break
-
-            if is_valid_tag(buf):
-                out += '<' + buf + '>'
-                continue
-            else:
-                stream.move(-len(buf)-1)
-                # continue so `<` is picked up by html parser
-
-
-        # breaks
-        if c == '\n': 
-            # find out if hard or soft.
-            # if two spaces, or backslash, insert hard break
-            # else soft break,
-            # remove all space after in next line
-            if out[-1] == '\\' or out[-2:] == '  ':
-                out = out.rstrip(' ') + '<br />\n'
-                # get rid of next spaces:
-                while stream.read(1) == ' ': pass
-                stream.move(-1) # move back to read new line
-            # otherwise, clear out all space around it:
-            else:
-                out = out.rstrip(' ') + '\n'
-                while stream.read(1) == ' ': pass
-                stream.move(-1) # move back to read new line
-            
-            continue # next item
-
-
-
-        # escaped ASCII (grab next as verbatim and put as c)
-        if c == '\\':
-            c = stream.read(1)
-            if c in ('!', '"', '#', '$', '%', '&', "'", '(', ')', '*', '+', ',', '-', '.', '/', ':', ';', '<', '=', '>', '?', '@', '[', '\\', ']', '^', '_', '`', '{', '|', '}', '~'):
-                # valid escaped character, put it through to next part:
-                pass
-            elif c == '\n':
-                # special case hard break, handled above, so put literal and reset:
-                out += '\\'
-                stream.move(-1)
-                continue
-            else:
-                # treat as normal character (no risk of being start of other inline trait)
-                out += '\\' + c
-                continue
-        
-        # valid HTML character references
-        elif c == "&": # elif since otherwise an escaped & may get interpreted wrong
-            # grab until semicolon:
-            buf = ''
-            while (c1 := stream.read(1)) != ';':
-                if c1 == '': raise ValueError("uncompleted HTML character reference")
-                buf += c1
-
-            # is is a numerical code?
-            try:
-                if buf[0] == "#":
-                    if buf[1] in ('X', 'x'):
-                        # hex value:
-                        num = int(buf[2:],16)
-                    else:
-                        num = int(buf[1:],10)
-                    # now convert to unicode (unless zero in which case U+FFFD)
-                    if num == 0: 
-                        c = '\uFFFD'
-                    else:
-                        c = chr(num)
-                # buffer is now content of the id
-                elif '&' + buf + ';' in HTML_entites.keys():
-                    c = HTML_entites['&' + buf + ';']["characters"]
-                    # pass it on in case it's HTML sensitive
-                else:
-                    # not a HTML reference, go back and add it literally:
-                    stream.move(-len(buf)-1)
-            except ValueError:
-                # invalid number code, print verbatim:
-                out += '&' + buf + ';'
-                continue
-            
-
-        # replace HTML sensitive with character references (and insecure unicode) (not  "'": "&apos;"?)
-        HTML_replace = {'"': "&quot;", '&': "&amp;", '<': "&lt;", '>': "&gt;", '\u0000' : '\uFFFD'}
-        if c in HTML_replace.keys():
-            out += HTML_replace[c]
-            continue
-
-
-        out += c # nothing else just pass on text verbatim
-
-
-    # now deal with emphasis TODO
-    # process_emphasis(out)
-
-    # clear out end breaks:
-    if out[-7:] == "<br />\n": out = out[:-7]
-
-    #clear end spaces:
-    return out.rstrip()
-
+    return True   
 
 def parse_md(text:StringIO)->str:
     '''
