@@ -250,7 +250,8 @@ class Block():
 
         # it allows for 0-3 whitespace before, so:
         l = Block.current_line.lstrip(' ')
-        l = l.replace('\t', '  ',1) # expand tabs (including the '- ' for the first one)
+        tabbed = (l[1] == "\t") # tabs assume a spacing of 1
+        l = l.replace('\t', '   ',1) # expand tabs (including the '- ' for the first one)
         l = l.replace('\t', '    ')
 
 
@@ -262,6 +263,8 @@ class Block():
             # otherwise pass that on as part of marker:
 
             # remove marker
+            if tabbed: n_spaces = 1
+
             Block.current_line = l[1 + n_spaces:]
             return c + ' ' * n_spaces
 
@@ -273,16 +276,15 @@ class Block():
                 # valid number, and a dot, check for spacing:
                 i = l[len(n)+1:len(n)+6]
                 n_spaces = len(i) - len(i.lstrip(' '))
+                if n_spaces == 0: return ''
                 if n_spaces == 5:
                     # that's code block, not extra indentation
                     Block.current_line = l[len(n) + 2:]
                     return n + c
                 # otherwise pass that on as part of marker:
-                if n_spaces > 0:
-                    Block.current_line = l[len(n) + 1 + n_spaces:]
-                    return n + c + ' ' * n_spaces
-                # otherwise there's not enough spaces, it's not a list
-                return ''
+                if tabbed: n_spaces = 1
+                Block.current_line = l[len(n) + 1 + n_spaces:]
+                return n + c + ' ' * n_spaces
         return ''
 
     def is_thematic_break(self)->bool:
