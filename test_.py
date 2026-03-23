@@ -35,7 +35,7 @@ def test_check(specs):
 if __name__ == "__main__":
 
     # test individual test:
-    id = 14
+    id = 20
     test_check(spec[id])
 
-# top passed: 277
+# top passed: 287

@@ -151,7 +151,7 @@ class Block():
         for child in self.children:
             res += child.realize() + "\n"
         # strip extra newlines:
-        if res[-1] == '\n': return res.rstrip('\n') + '\n'
+        if (len(res) > 0) and (res[-1] == '\n'): return res.rstrip('\n') + '\n'
         else: return res
         
     def can_continue(self)->bool:
@@ -204,16 +204,13 @@ class Block():
         if (i := self.is_HTML_block()):
             return HTML_block(self, i)
 
-        # if self.is_link_reference_definition():
-        #     pass # TODO
+        if self.is_link_reference_definition():
+            return Link_reference(self)
         
         # if self.is_table_block():
         #     pass # TODO
 
         # else it's a paragraph or not a new block
-
-
-
 
     def is_block_quote_block(self)->bool:
         '''is the next line a new block quote.
@@ -362,7 +359,8 @@ class Block():
 
     def is_indented_code_block(self)->bool:
         '''is the next line an indented code block,
-        indented code blocks are lines beginning with 4 indentations, followed by arbitrary text'''
+        indented code blocks are lines beginning with 4 indentations, followed by arbitrary text.
+        Indented code blocks cannot interrupt paragraphs (not relevant here)'''
 
         # if tab is involved, spaces before tabs are not carried through
         st = Block.current_line[0:4] # relevant part
@@ -456,21 +454,32 @@ class Block():
         
         return 0 
 
-    
     def is_link_reference_definition(self)->bool:
-        '''is the next line a link reference definition'''
-        raise NotImplementedError()
+        '''is the next line a link reference definition.
+        link references are comprised of a link label preceeded by 0-3 indentation
+        then a colon `:`, then (with optional whitespace including up to one line break)
+        a link destination, then (at least one whitespace)
+        an optional link title. and no further elements.
+        
+        plan is to treat a potential link reference as link reference, then regress to paragraph is not
+        (link reference also cannot interrupt a paragraph)'''
+
+        # first check for label:
+        l = Block.current_line.rstrip(' ')
+        if l[0] != '[': return False
+        label,_,rest = l[1:].partition(']') # rest may be empty if title continues
+        if not valid_label_name(label): return False
+        
+        # now we don't know if the entire link is valid, but it's not invalid
+        # treat it as valid and if not collapse it into a paragraph
+        return True
     
     def is_table_block(self)->bool:
         '''is the next line a table block'''
         raise NotImplementedError()
 
-
     def __repr__(self) -> str:
         return self.__class__.__name__ + ": " + self.contents
-
-
-
 
 class Block_quote(Block):
 
@@ -577,7 +586,6 @@ class Thematic_break(Block):
     def realize(self) -> str:
         return "<hr />"
 
-
 class ATX_heading(Block):
 
     def __init__(self, parent: Block, level:int) -> None:
@@ -615,7 +623,6 @@ class Setext_heading(Block):
     
     def realize(self) -> str:
         return f"<h{self.level}>" + inline_parse(self.contents) + f"</h{self.level}>"
-
 
 class Indented_code_block(Block):
 
@@ -723,14 +730,12 @@ class HTML_block(Block):
     def realize(self) -> str:
         return self.contents
 
-
 class Paragraph(Block):
     
     def can_continue(self) -> bool:
-        if Block.current_line.strip() == "": 
-            self.open = False # paragraph can't be lazy
-            return False
-        else: return True
+        if not Block.current_line.strip() == "": return True
+        self.open = False # paragraph can't be lazy
+        return False
 
     def add_content(self, content: str):
         self.contents += content
@@ -738,7 +743,60 @@ class Paragraph(Block):
     def realize(self) -> str: # strip 0 to 3 spaces before
         return "<p>" + inline_parse(self.contents.lstrip(' ')) + "</p>"
 
+link_references= [] # references have: label, link, and title
+class Link_reference(Block):
 
+    def can_continue(self) -> bool:
+        if not Block.current_line.strip() == "": return True
+        self.open = False # link reference can't be lazy
+        self.evaluate_ref() # check if valid link
+        return False
+    
+    def add_content(self, content: str):
+        self.contents += content
+    
+    def evaluate_ref(self):
+        '''check if link reference is valid, if it is, add to list of references, else
+        regress to paragraph.'''
+        if self.isvalid():
+            pass
+        else:
+            # revert to paragraph
+            pass
+
+    def isvalid(self):
+        '''check if link reference is valid, if it is, add to list of references, else
+        regress to paragraph.
+         link references are comprised of a link label preceeded by 0-3 indentation
+        then a colon `:`, then (with optional whitespace including up to one line break)
+        a link destination, then (at least one whitespace)
+        an optional link title. and no further elements.'''
+
+        # for redundancy, check link label:
+        cont = self.contents.lstrip(' ')
+        if cont[0] != '[': return False
+        
+        label,_,rest = cont[1:].partition(']')
+        if not valid_label_name(label): return False
+
+        # now rest has destination and title.
+        if rest.lstrip()[0] == '<':
+            # braced destination
+            # find unescaped right brace
+            m = re.fullmatch('(?<!\\)[>]',rest) # TODO
+
+
+
+
+
+
+    
+    def realize(self) -> str:
+        return '' # link references aren't printed
+
+ATTRIBUTE_START = r"[a-zA-Z_.:-]+"
+ATTRIBUTE_PATTERN = r"[a-zA-Z_:]"
+UVALUE_SET = ('"', "'", '=', '<', '>', '`')
 def is_HTML_tag(tag:str)->bool:
     '''checks if a tag (with opening brackets) is a valid html tag.
     more properly, it checks that:
@@ -838,13 +896,6 @@ def is_HTML_tag(tag:str)->bool:
     # if you made it through all that, you're a valid tag
     return True           
 
-
-
-
-
-ATTRIBUTE_START = r"[a-zA-Z_.:-]+"
-ATTRIBUTE_PATTERN = r"[a-zA-Z_:]"
-UVALUE_SET = ('"', "'", '=', '<', '>', '`')
 NAME_START = r"[a-zA-Z]"
 NAME_PATTERN = r"[a-zA-Z0-9-]+"
 def is_HTML_tag_name(name:str)->bool:
@@ -852,9 +903,6 @@ def is_HTML_tag_name(name:str)->bool:
     if not re.fullmatch(NAME_PATTERN, name): return False
     if not re.fullmatch(NAME_START, name[0]): return False
     return True
-
- 
-
 
 class fakestream:
     '''stream-like interface for a string, to enable character by character parsing'''
@@ -877,7 +925,6 @@ class fakestream:
     def move(self,pos):
         '''moves index by given amount'''
         self.idx += pos
-
 
 def inline_parse(text:str)->str:
     '''runs the inline parse on the text, in order to (in order of precedence):
@@ -913,9 +960,15 @@ def inline_parse(text:str)->str:
             # add new text string after to continue in (leave emphasis as it's own thing)
             continue
 
+        if (t := parse_inline_autolink(stream, c)):
+            out.extend([t,'']) #type:ignore
+            continue
+
         if (t := parse_inline_HTML(stream,c)):
             out.extend([t, '']) # type:ignore
             continue
+
+        
         
         if (t := parse_inline_escape(stream,c)):
             out[-1] += t # type:ignore
@@ -1020,6 +1073,108 @@ def eat_until(stream:fakestream, stop:str)->str:
             return ''
     return buf
 
+def parse_inline_autolink(stream:fakestream, c:str):
+    '''autolinks are links within `<>` brackets.
+    .
+    link formed as a normal HTML link with a title being the link
+    (contents are HTML sanitized)
+    
+    the link may also be an email link, in which case an email link should be used.
+    
+    No spaces allowed inside'''
+    if c != '<': return False
+
+    link = eat_until(stream,'>')
+    if link[-1] != '>':
+        # hit EOF, invalid:
+        stream.move(-len(link))
+        return False
+    link = link[:-1] # strip `>`
+    # else check for valid link or email:
+    if valid_URI_link(link):
+        return f'<a href="{URI_sanitize(link)}">{HTML_sanitize(link)}</a>'
+    elif valid_email(link):
+        return f'<a href="mailto:{HTML_sanitize(link)}">{HTML_sanitize(link)}</a>'
+    else: return False
+    
+URI_VALID = '[a-zA-Z0-9!#$&\'()*+,/:;=?@._~-]' # HTML sanitizing takes priority, so those are allowed through
+# trial and error on which reserved characters are allowed...
+def URI_sanitize(link:str):
+    '''superset of HTML sanitize that also replaces non-allowed characters with % replacements'''
+    out = []
+    for c in link:
+        if re.fullmatch(URI_VALID,c): out.append(HTML_sanitize(c))
+        else:
+            out.append(f'%{ord(c):X}')
+    return "".join(out)
+
+HTML_replace = {'"': "&quot;", '&': "&amp;", '<': "&lt;", '>': "&gt;", '\u0000' : '\uFFFD'}
+def HTML_sanitize(string:str)->str:
+    '''returns a sanitized version of the string as to not use symbols
+    that might break HTML formatting'''
+    
+    
+    # oneliner for one-lengths
+    if len(string) == 1: return HTML_replace[string] if string in HTML_replace.keys() else string
+    
+    out = []
+    for c in string:
+        if c in HTML_replace.keys():
+            out.append(HTML_replace[c])
+        else: out.append(c)
+    return "".join(out)
+
+SCHEME_PATTERN = r'[a-zA-Z+.-]{2,32}'
+URI_NOMATCH = r'[\u0000-\u001F\u007f <>]'
+def valid_URI_link(link:str):
+    '''checks if link is valid URI link.
+    links consist of a scheme, which is a sequence of 2-32 chars
+    starting with ASCII letter and followed by ASCII,digits, or `+`, `.`, or `-`
+    followed by a colon `:`, followed by zero or more characters, not including ASCII control
+    characters, space, `<` or `>`'''
+    scheme,_,rest = link.partition(':')
+    if not re.fullmatch(SCHEME_PATTERN, scheme): return False
+    if re.match(URI_NOMATCH,rest): return False
+    return True
+
+def valid_destination_link(link:str, allow_incomplete:bool=True):
+    '''link destinations can be broader than URI links, so have less strict rules.
+    Can either be bracketed in `<>`, or not, in which case no control characters, or space is allowed,
+    and no unbalanced non-backspaced parentheses'''
+
+    if link[0] == '<':
+        # bracketed
+        if allow_incomplete:
+            link = link.rstrip('>')
+        elif link[-1] != '>': return False
+
+        # look for unescaped brackets
+        if re.fullmatch(r'\w*[\]\]](?<!\\)', link[1:]): return False # not sure on the regex
+        else: return True
+    # else:
+    count = 0
+    for c in link:
+        if ord(c) <= 0x1F or c in ('\u007F', ' '): return False
+        # check for balanced parentheses:
+        if c == '(': count += 1
+        elif c == ')': count -=1
+        if count < 0: return False
+    return True
+    
+EMAIL_SPEC = r"/^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/"
+def valid_email(email:str):
+    '''valid email is anything that matches the "non-normative regex from the HTML5 spec"'''
+    if re.fullmatch(EMAIL_SPEC,email): return True
+    else: return False
+
+def valid_label_name(name:str):
+    '''checks if label name is valid, bust have at least one non-whitespace character
+    and must not have any unescaped `]`, and a max of 999 chars long, name assumed to be sanitized of opening and closing brackets'''
+    if len(name) > 999: return False
+    if len(name.strip()) == 0: return False
+    if re.fullmatch(r'\w*\](?<!\\)', name): return False # not sure on the regex
+
+
 
 def parse_inline_linebreak(stream:fakestream, out:list[str], c:str)->bool:
     '''reads linbreak, and if it is figures out if it's soft or hard,
@@ -1106,8 +1261,6 @@ def parse_inline_char_ref(stream:fakestream, c:str):
         # invalid number code, go back:
         stream.move(-len(buf) - 1)
         return False
-
-
 
 delimeter_stack = []
 def parse_inline_emphasis(stream:fakestream, out:list[str], c:str)->str|bool:
@@ -1214,8 +1367,6 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str)->str|bool:
         # found none, insert literal:
         return c
 
-
-
 def process_emphasis(out:list[str], stack_bottom:int = -1):
     '''Run process emphasis, until we reach indicated stack bottom'''
     curr_pos = stack_bottom+1
@@ -1285,17 +1436,6 @@ def process_emphasis(out:list[str], stack_bottom:int = -1):
     delimeter_stack = delimeter_stack[:stack_bottom+1]
     return;
 
-def HTML_sanitize(string:str)->str:
-    '''returns a sanitized version of the string as to not use symbols
-    that might break HTML formatting'''
-    HTML_replace = {'"': "&quot;", '&': "&amp;", '<': "&lt;", '>': "&gt;", '\u0000' : '\uFFFD'}
-    out = ""
-    for c in string:
-        if c in HTML_replace.keys():
-            out += HTML_replace[c]
-        else: out += c
-    return out
-
 def char_counter(s:fakestream, c:str)->int:
     '''counts length of char run, and sets stream to end of run.'''
     tick_len = 0
@@ -1303,8 +1443,6 @@ def char_counter(s:fakestream, c:str)->int:
         tick_len += 1
     s.move(-1) # go back one
     return tick_len
-
-
 
 def parse_md(text:StringIO)->str:
     '''
@@ -1321,15 +1459,7 @@ def parse_md(text:StringIO)->str:
 
 
 if __name__ == "__main__":
-    testcase = '''
-The International Standard Atmosphere is a model of the atmosphere that is used to, well, model the atmosphere.
-
-It is very important to have a model of the atmosphere, it allows you to calculate many different variables in many different conditions
-
-# Geopotential altitude
-All the below formulae, (and everything is atmospheric aerospace analysis) are based on gravity being constant with height
     
-'''
     test_str = '</imatag attr="woah" attr2="oh baby" _23 = true\n >'
     is_HTML_tag(test_str)
     # testcase = StringIO(testcase)
