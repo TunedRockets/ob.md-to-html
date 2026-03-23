@@ -150,7 +150,9 @@ class Block():
         res = ""
         for child in self.children:
             res += child.realize() + "\n"
-        return res
+        # strip extra newlines:
+        if res[-1] == '\n': return res.rstrip('\n') + '\n'
+        else: return res
         
     def can_continue(self)->bool:
         '''checks if block can continue on next line, if it can it consumes the continuing marker.
@@ -439,9 +441,9 @@ class Block():
         if l[0:9] == "<![CDATA[":
             return 5
         
-        # six: known tag
-        if l[0] == "<" and l[-1] in (' ', '\t', '>', '\n'):
-            if l[1:-1] in six_tags:
+        # six: known tag (only needs to start with known tag)
+        if l[0] == "<":
+            if l.partition('>')[0][1:] in six_tags:
                 return 6
         
         
@@ -449,7 +451,7 @@ class Block():
             # 7 can't interrupt paragraph, so:
             if isinstance(self, Paragraph): return 0
 
-            if is_HTML_tag(l): # needs to be standalone tag
+            if is_HTML_tag(l.rstrip()): # needs to be standalone tag
                 return 7
         
         return 0 
@@ -751,6 +753,7 @@ def is_HTML_tag(tag:str)->bool:
     if tag[-1] == '/' and tag[-2] in (' ', '\t', '\n'):
         tag = tag[:-1]
 
+    if tag == '<': return False # edge case
 
     # start with line beginning:
     sp = tag.split(' ')
@@ -948,25 +951,48 @@ def parse_inline_code(stream:fakestream, c:str)->str|bool:
     while (d := stream.read(1)) != '':
         if d != '`':
             # just insert regular characters (except make newlines to space)
+            # and sanitize it as html
             buf += (d if d != '\n' else ' ') 
             continue
         # else:
         m = char_counter(stream, '`') + 1 # number of ticks
         if m == n:
             # was matching, return buffer and tags
-            return '<code>' + buf + '</code>'
+            return '<code>' + HTML_sanitize(buf) + '</code>'
         else:
             # just treat tags literally:
             buf += '`'*m
             continue
     # reached EOF, back up and ticks as literal:
-    stream.move(-len(buf) - 1)
+    stream.move(-len(buf))
     return '`' * n
 
 def parse_inline_HTML(stream:fakestream, c:str)->str|bool:
     '''read character, and if it's inline HTML, returns the resulting string.
     else returns falseand backs up stream'''
     if c != '<': return False
+
+    # check ahead if special tag:
+    bite = stream.read(8)
+    if bite[0:3] == '!--': # comment
+        stream.move(-len(bite)+3)
+        return '<!--' + eat_until(stream, '-->')
+    if bite[0:5] == '!---': # comment #2
+        stream.move(-len(bite)+5)
+        return '<!--->' + eat_until(stream, '-->')
+    if bite[0:4] == '!-->': # comment #3
+        stream.move(-len(bite)+4)
+        return '<!-->' + eat_until(stream, '-->')
+    if bite[0] == '?': # processing instruction
+        stream.move(-len(bite)+1)
+        return '<?' + eat_until(stream, '?>')
+    if bite == '![CDATA[': # CDATA
+        return '<![CDATA[' + eat_until(stream, ']]>')
+    if bite[0] == '!': # Declaration
+        stream.move(-len(bite)+1)
+        return '<!' + eat_until(stream, '>')
+
+    # regular tags:
     buf = ''
     while (c2 := stream.read(1)) != '>':
         buf += c2
@@ -980,6 +1006,20 @@ def parse_inline_HTML(stream:fakestream, c:str)->str|bool:
     else:
         stream.move(-len(buf))
         return '&lt;'
+
+def eat_until(stream:fakestream, stop:str)->str:
+    '''Will read from the stream until the specified string is reached
+    then return everything up to and including the string'''
+    buf = stream.read(len(stop))
+    while buf[-len(stop):] != stop:
+        if (c := stream.read(1)) != '':
+            buf += c
+        else:
+            # reached eof, go back
+            stream.move(-len(buf))
+            return ''
+    return buf
+
 
 def parse_inline_linebreak(stream:fakestream, out:list[str], c:str)->bool:
     '''reads linbreak, and if it is figures out if it's soft or hard,
@@ -1245,13 +1285,16 @@ def process_emphasis(out:list[str], stack_bottom:int = -1):
     delimeter_stack = delimeter_stack[:stack_bottom+1]
     return;
 
-def HTML_sanitize(c:str)->str:
-    '''returns a sanitized version of the char as to not use symbols
+def HTML_sanitize(string:str)->str:
+    '''returns a sanitized version of the string as to not use symbols
     that might break HTML formatting'''
     HTML_replace = {'"': "&quot;", '&': "&amp;", '<': "&lt;", '>': "&gt;", '\u0000' : '\uFFFD'}
-    if c in HTML_replace.keys():
-        return HTML_replace[c]
-    else: return c
+    out = ""
+    for c in string:
+        if c in HTML_replace.keys():
+            out += HTML_replace[c]
+        else: out += c
+    return out
 
 def char_counter(s:fakestream, c:str)->int:
     '''counts length of char run, and sets stream to end of run.'''

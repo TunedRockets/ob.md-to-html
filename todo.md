@@ -5,5 +5,6 @@ Remaining known issues:
 - links and link markers
 - HTML block checker is wrong
 - test HTML tag checker
+- 160 is broken due to above?
 - add other types of tag e.g. '<?' to inline
 - tabs are not tabs but are tabs.

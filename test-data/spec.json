@@ -1,5 +1,13 @@
 [
   {
+    "markdown": "",
+    "html": "",
+    "example": 0,
+    "start_line": 0,
+    "end_line": 0,
+    "section": "empty input"
+  },
+  {
     "markdown": "\tfoo\tbaz\t\tbim\n",
     "html": "<pre><code>foo\tbaz\t\tbim\n</code></pre>\n",
     "example": 1,

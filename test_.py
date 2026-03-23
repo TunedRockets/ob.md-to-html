@@ -35,7 +35,7 @@ def test_check(specs):
 if __name__ == "__main__":
 
     # test individual test:
-    id = 615 # id in pytest is one less than this
-    test_check(spec[id-1])
+    id = 14
+    test_check(spec[id])
 
-    
+# top passed: 277
