@@ -758,13 +758,21 @@ class Link_reference(Block):
     def evaluate_ref(self):
         '''check if link reference is valid, if it is, add to list of references, else
         regress to paragraph.'''
-        if self.isvalid():
-            pass
+        if (t :=self.isvalid()):
+            link_references.append({
+                "label": label_collapse(t[0]), # type:ignore
+                "dest": t[1], # type:ignore
+                "title": t[2] # type:ignore
+            })
         else:
-            # revert to paragraph
-            pass
+            # revert to paragraph (create paragraph, give it contents, kill self)
+            p = Paragraph(self.parent)
+            p.open = False # we got closed so it's closed
+            p.contents = self.contents
+            self.parent.children.remove(self) # orphan yourself
+            del(self) # kill yourself
 
-    def isvalid(self):
+    def isvalid(self)->tuple|bool:
         '''check if link reference is valid, if it is, add to list of references, else
         regress to paragraph.
          link references are comprised of a link label preceeded by 0-3 indentation
@@ -779,19 +787,39 @@ class Link_reference(Block):
         label,_,rest = cont[1:].partition(']')
         if not valid_label_name(label): return False
 
+        # check for colon:
+        if not rest[0] == ':': return False
+        else: rest = rest[1:] # remove colon
+
         # now rest has destination and title.
-        if rest.lstrip()[0] == '<':
+        rest = rest.lstrip() # remove whitespace
+        if rest[0] == '<':
             # braced destination
             # find unescaped right brace
-            m = re.fullmatch('(?<!\\)[>]',rest) # TODO
-
-
-
-
-
-
+            m = re.search('(?<!\\)[>]',rest)
+            if m is None: return False # no closing `<`
+            # else:
+            dest = rest[1:m.start()]
+            title = rest[m.start():].strip()
+        else: # non bracketed destination:
+            count = 0
+            dests = []
+            for c in rest:
+                if ord(c) <= 0x1F or c in ('\u007F', ' '): break # invalid character for destination
+                # check for balanced parentheses:
+                if c == '(': count += 1
+                elif c == ')': count -=1
+                if count < 0: return False # invalid parentheses
+                dests.append(c)
+            dest = "".join(dests)
+            # apparently valid destination (if subsequent title is valid)
+            title = rest[len(dest):].strip()
+        if not valid_link_title(title): return False
+        # finally if nothing shouted false, return values
+        return label, dest, title[1:-1] # title trimmed of containers
     
     def realize(self) -> str:
+        if self.open: self.evaluate_ref() # jsut in case we're last
         return '' # link references aren't printed
 
 ATTRIBUTE_START = r"[a-zA-Z_.:-]+"
@@ -954,10 +982,11 @@ def inline_parse(text:str)->str:
         if (t := parse_inline_emphasis(stream,out,c)):
             out.extend([t, '']) # type:ignore
             continue
+        
+        
 
         if (t := parse_inline_links(stream,out,c)):
             out.extend([t, '']) # type:ignore
-            # add new text string after to continue in (leave emphasis as it's own thing)
             continue
 
         if (t := parse_inline_autolink(stream, c)):
@@ -968,7 +997,9 @@ def inline_parse(text:str)->str:
             out.extend([t, '']) # type:ignore
             continue
 
-        
+        if (t := parse_inline_ref_links(stream,c)):
+            out.extend([t,'']) # type:ignore
+            continue
         
         if (t := parse_inline_escape(stream,c)):
             out[-1] += t # type:ignore
@@ -1149,7 +1180,7 @@ def valid_destination_link(link:str, allow_incomplete:bool=True):
         elif link[-1] != '>': return False
 
         # look for unescaped brackets
-        if re.fullmatch(r'\w*[\]\]](?<!\\)', link[1:]): return False # not sure on the regex
+        if re.search(r'\w*[\[\]](?<!\\)', link[1:]): return False # not sure on the regex
         else: return True
     # else:
     count = 0
@@ -1160,7 +1191,23 @@ def valid_destination_link(link:str, allow_incomplete:bool=True):
         elif c == ')': count -=1
         if count < 0: return False
     return True
-    
+
+def valid_link_title(title:str)->bool:
+    '''checks if link title, including enclosing characters, is valid'''
+    if title == '': return True
+    if title[0] == '"' and title[-1] == '"':
+        if re.search(r'\w*["](?<!\\)',title[1:-1]): return False
+        else: return True
+
+    elif title[0] == "'" and title[-1] == "'":
+        if re.search(r"\w*['](?<!\\)",title[1:-1]): return False
+        else: return True
+
+    elif title[0] == '(' and title[-1] == ')':
+        if re.search(r'\w*[()](?<!\\)',title[1:-1]): return False
+        else: return True
+    else: return False
+
 EMAIL_SPEC = r"/^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/"
 def valid_email(email:str):
     '''valid email is anything that matches the "non-normative regex from the HTML5 spec"'''
@@ -1172,7 +1219,15 @@ def valid_label_name(name:str):
     and must not have any unescaped `]`, and a max of 999 chars long, name assumed to be sanitized of opening and closing brackets'''
     if len(name) > 999: return False
     if len(name.strip()) == 0: return False
-    if re.fullmatch(r'\w*\](?<!\\)', name): return False # not sure on the regex
+    if re.search(r'\w*\](?<!\\)', name): return False # looking for unescaped `]`
+    return True
+
+def label_collapse(label:str)->str:
+    '''perform operations to collapse label in reference links'''
+
+    label = label.casefold().strip().replace('\t',' ').replace('\n',' ')
+    label = " ".join(label.split())
+    return label
 
 
 
@@ -1309,6 +1364,69 @@ def parse_inline_emphasis(stream:fakestream, out:list[str], c:str)->str|bool:
 
     # return the raw string:
     return c * n
+
+def parse_inline_ref_links(stream:fakestream, c:str)->str|bool:
+    '''Read character, and see if it is an inline reference link,
+    by matching with the link_references. checks for full, collapsed, and shortcut links'''
+
+    if c != '[': return False
+
+    # read potential label into buffer:
+    buf = []
+    buf2 = [] # for later
+    while (c:=stream.read(1)) != ']':
+        if c == '':
+            # reached EOF, go back and return
+            stream.move(-len(buf))
+            return False
+        buf.append(c)
+        if c == '\\': buf.append(stream.read(1)) # disregard next from criteria
+    text = "".join(buf)
+    # check for label (if not text=label)
+    if stream.read(1) == '[':
+        
+        # read until next  ']':
+        
+        while (c:=stream.read(1)) != ']':
+            if c == '':
+                # reached EOF, go back the second buffer and break with no label
+                stream.move(-len(buf2) - 1) # -1 for opening bracket
+                buf2 = []
+                break
+            buf2.append(c)
+            if c == '\\': buf2.append(stream.read(1)) # disregard next from criteria
+        label = "".join(buf2)
+
+        # deal with empty label:
+        if label == '':
+            label = text
+            text = ''
+
+    else:
+        stream.move(-1)
+        label = text
+        text = ''
+    
+    # check for invalid link text (can't forget...) TODO
+
+    # try to match label
+    for l in link_references:
+        if label_collapse(label) == l['label']:
+            ref = l
+            break
+    else:
+        # no reference, no link
+        stream.move(-len(buf))
+        return False
+    
+    # fill in link:
+    out = f'<a href="{ref['dest']}"'
+    if ref['title'] != '': out += f' title="{ref['title']}"'
+    return out + f'>{text}</a>'
+    
+    
+
+
 
 def parse_inline_links(stream:fakestream,out:list[str], c:str)->str|bool:
     '''read character, if it starts link, return an emphasis string
