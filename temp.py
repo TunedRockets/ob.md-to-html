@@ -1,7 +1,8 @@
 import re
 
 
-s = "<blablabla\>bla bla bnla>"
+s = "ö"
 
-m = re.search(r"(?<!\\)[>]", s)
-print(m)
+i = s.encode()
+for b in i:
+    print(f'{b:X}')

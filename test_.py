@@ -11,13 +11,13 @@ from io import StringIO
 import pytest
 
 
-def load_data()->list[dict]:
+def load_data(max:int=-1)->list[dict]:
     with open("test-data/spec.json", 'r', encoding="utf-8") as file:
 
         lines = file.readlines()
         spec = json.loads("".join(lines))
         # spec = json.load(file, encoding="utf-8", errors="ignore")
-    return list(spec)
+    return list(spec)[0:max]
 
 
 spec = load_data()
@@ -35,8 +35,8 @@ def test_check(specs):
 if __name__ == "__main__":
 
     # test individual test:
-    id = 626
+    id = 42
     test_check(spec[id])
 
-# top number passed: 361 (more passed than failed!)
+# top number passed: 373 (more passed than failed!)
 # < 11 is tab issues

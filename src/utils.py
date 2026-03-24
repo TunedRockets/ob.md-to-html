@@ -2,9 +2,19 @@
 utilities, not required to be in the main file
 '''
 import re
-
+import unicodedata as uni
+from pathlib import Path
+import json
+with open(Path(__file__).parent.joinpath("entities.json")) as file:
+    HTML_ENTITIES:dict = json.load(file)
 
 ASCII_PUNCTUATION_ESCAPE = r'\\[!"#$%&\'()*+,-./:;<=>?@\[\\\]\^_`{|}~]'
+def ascii_escape(s:str)->str:
+    '''returns a copy with escaped ASCII puctuation replaced with the literal punctuation'''
+    mm = re.findall(ASCII_PUNCTUATION_ESCAPE, s)
+    for m in mm:
+            s = s.replace(m,m[1])
+    return s
 
 ATTRIBUTE_START = r"[a-zA-Z_.:-]+"
 ATTRIBUTE_PATTERN = r"[a-zA-Z_:]"
@@ -127,8 +137,27 @@ def URI_sanitize(link:str):
     for c in link:
         if re.fullmatch(URI_VALID,c): out.append(HTML_sanitize(c))
         else:
-            out.append(f'%{ord(c):X}')
+            # split up in UTF-8 bytes, each byte encoded in hex after a percent
+            for b in c.encode():
+                out.append(f'%{b:X}')
     return "".join(out)
+
+HTML_REF_WORD = r'&[a-zA-Z0-9]+;'
+HTML_REF_DIGIT = r'&#X?[a-fA-F0-9]{1,7};'
+def resolve_HTML_char_refs(s:str)->str:
+    '''similar to parse_inline_char_ref(),
+    finds all HTML char references in '''
+    mm = re.findall(HTML_REF_WORD,s)
+    for m in mm:
+        if m in HTML_ENTITIES.keys():
+            s = s.replace(m,HTML_ENTITIES[m]['characters'])
+    mm = re.findall(HTML_REF_DIGIT,s)
+    for m in mm:
+        i = int(m[3:-1],16) if m[2] in ('X','x') else int(m[2:-1])
+        s = s.replace(m,chr(i))
+    return s
+
+
 
 HTML_replace = {'"': "&quot;", '&': "&amp;", '<': "&lt;", '>': "&gt;", '\u0000' : '\uFFFD'}
 def HTML_sanitize(string:str)->str:
@@ -221,9 +250,8 @@ def label_collapse(label:str)->str:
     return label
 
 if __name__ == "__main__":
-    teststr = r'bla\* foo\%, zap \@'
+    teststr = '&nbsp; &amp; &copy; &AElig; &Dcaron; &#35; &#1234; &#992; &#0; &nbsp &x; &#; &#x;'
+    print(resolve_HTML_char_refs(teststr))
 
-    while m := re.search(ASCII_PUNCTUATION_ESCAPE,teststr):
-        print(teststr[m.start():m.end()])
-        teststr = teststr.replace(m[0],m[0][1])
+    
         

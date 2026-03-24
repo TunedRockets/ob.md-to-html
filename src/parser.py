@@ -200,6 +200,9 @@ class Block():
             if isinstance(self, List_Block) and self.marker_belongs(m):
                 # same list, keep going
                 return List_item(self,m)
+            elif isinstance(self,List_item) and self.parent.marker_belongs(m): # type:ignore
+                # in case we're in the item
+                return List_item(self.parent,m) # type:ignore
             else:
                 # new list, "add" list_block (constructor takes care of proper ordering)
                 b = List_Block(self,m)
@@ -548,7 +551,7 @@ class List_Block(Block):
 
 class List_item(Block):
 
-    def __init__(self, parent: Block | None, marker:str) -> None:
+    def __init__(self, parent: List_Block | None, marker:str) -> None:
         super().__init__(parent)
         self.marker = marker
 
@@ -652,7 +655,7 @@ class Indented_code_block(Block):
         # trim empty lines: (should only trim start and end lines)
         l = '\n'.join(filter(None,self.contents.split('\n'))) 
 
-        return "<pre><code>" + l + ("</code></pre>" if l[-1] == '\n' else "\n</code></pre>")
+        return "<pre><code>" + HTML_sanitize(l) + ("</code></pre>" if l[-1] == '\n' else "\n</code></pre>")
 
 class Fenced_code_block(Block):
 
@@ -677,11 +680,11 @@ class Fenced_code_block(Block):
     def realize(self) -> str:
 
         s = self.contents.split('\n')
-        info = s.pop(0)
+        info = ascii_escape(resolve_HTML_char_refs(s.pop(0)))
         self.contents = '\n'.join(filter(None,s)) # without first line and filtered
-        info_s = (' class="language-' + info.split(' ')[0] + '"') if len(info) > 0 else ""
+        info_s = (' class="language-' + info.split()[0] + '"') if len(info) > 0 else ""
 
-        return "<pre><code"+ info_s + ">" + self.contents + "\n</code></pre>"
+        return "<pre><code"+ info_s + ">" + HTML_sanitize(self.contents) + "\n</code></pre>"
 
 class HTML_block(Block):
 

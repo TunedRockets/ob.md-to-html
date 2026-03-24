@@ -9,7 +9,7 @@ sys.path.append(directory)
 from utils import *
 import json
 with open(Path(__file__).parent.joinpath("entities.json")) as file:
-    HTML_entites:dict = json.load(file)
+    HTML_ENTITIES:dict = json.load(file)
 
 class fakestream:
     '''stream-like interface for a string, to enable character by character parsing'''
@@ -277,7 +277,7 @@ def parse_inline_char_ref(stream:fakestream, c:str):
     while (c1 := stream.read(1)) != ';':
         if c1 == '':
             # reached EOF, it's invalid so back up
-            stream.move(-len(buf))
+            stream.move(-len(buf)-1)
             return False
         buf += c1
     # figure out if it's valid:
@@ -295,8 +295,8 @@ def parse_inline_char_ref(stream:fakestream, c:str):
             else:
                 return HTML_sanitize(chr(num))
         # buffer is now content of the id
-        elif '&' + buf + ';' in HTML_entites.keys():
-            return HTML_sanitize(HTML_entites['&' + buf + ';']["characters"])
+        elif '&' + buf + ';' in HTML_ENTITIES.keys():
+            return HTML_sanitize(HTML_ENTITIES['&' + buf + ';']["characters"])
         else:
             # not a HTML reference, go back and add it literally:
             stream.move(-len(buf) - 1)
@@ -515,13 +515,13 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)-
 
         # have valid, close out
         
-        # check title and destination for escapes:
-        while m := re.search(ASCII_PUNCTUATION_ESCAPE,title):
-            title = title.replace(m[0],m[0][1])
+        # check title and destination for escapes, and sanitize
+        title = ascii_escape(resolve_HTML_char_refs(title))
+        dest = ascii_escape(resolve_HTML_char_refs(dest))
+        # more sanitizing:
+        dest = URI_sanitize(dest)
 
-        while m := re.search(ASCII_PUNCTUATION_ESCAPE,dest):
-            dest = dest.replace(m[0],m[0][1])
-        
+
         # add to out and clear it:
         out = out[:delim['idx']]
         image = (delim['type'] == '![')
