@@ -147,6 +147,11 @@ class Block():
 
     def realize(self)->str:
         '''convert structure to HTML, for root this means adding every child together'''
+
+        # edge case:
+        if isinstance(self.open_child, Link_reference):
+            self.open_child.evaluate_ref()
+
         res = ""
         for child in self.children:
             res += child.realize() + "\n"
@@ -360,7 +365,9 @@ class Block():
     def is_indented_code_block(self)->bool:
         '''is the next line an indented code block,
         indented code blocks are lines beginning with 4 indentations, followed by arbitrary text.
-        Indented code blocks cannot interrupt paragraphs (not relevant here)'''
+        Indented code blocks cannot interrupt paragraphs'''
+
+        if isinstance(self, Paragraph): return False
 
         # if tab is involved, spaces before tabs are not carried through
         st = Block.current_line[0:4] # relevant part
@@ -764,6 +771,7 @@ class Link_reference(Block):
                 "dest": t[1], # type:ignore
                 "title": t[2] # type:ignore
             })
+            self.open = False # close yourself
         else:
             # revert to paragraph (create paragraph, give it contents, kill self)
             p = Paragraph(self.parent)
@@ -819,7 +827,7 @@ class Link_reference(Block):
         return label, dest, title[1:-1] # title trimmed of containers
     
     def realize(self) -> str:
-        if self.open: self.evaluate_ref() # jsut in case we're last
+        if self.open: self.evaluate_ref() # just in case we're last
         return '' # link references aren't printed
 
 ATTRIBUTE_START = r"[a-zA-Z_.:-]+"
@@ -831,20 +839,23 @@ def is_HTML_tag(tag:str)->bool:
     - line begins with `<` or `</`
     - followed by a tag-name
     - followed by 0 or more attributes, with optional attribute values
-    - followed by optionally `>`
+    - followed by `>`
     - each separated by spaces, tabs, and up to one line ending'''
+
+    
+    # ensure tags are in place:
+    if not (tag[0]=='<' and tag[-1] == '>'): return False
 
     # strip end tag:
     tag = tag.rstrip('>')
     if tag[-1] == '/' and tag[-2] in (' ', '\t', '\n'):
         tag = tag[:-1]
 
-    if tag == '<': return False # edge case
-
     # start with line beginning:
     sp = tag.split(' ')
     name = sp[0]
     if name[0] != '<': return False
+    if len(name) < 2: return False
     if name[1] == '/':
         # closing tag, that's easy
         if tag.rstrip()[-1] != '>': return False
@@ -864,7 +875,7 @@ def is_HTML_tag(tag:str)->bool:
     # stripping end:
     l = l.strip('>').strip('/')
 
-    mode_in = '' # 'a' : attribute name, 'u' : unquoted, '"' : single quoted, ''' double quoted
+    mode_in = 's' # 's': start 'a' : attribute name, 'u' : unquoted, '"' : single quoted, ''' double quoted
     eat = True
     for c in l:
         if eat:
@@ -946,8 +957,9 @@ class fakestream:
                 self.idx += 1
                 return self.content[self.idx-1]
             self.idx += size
-            return self.content[self.idx-size: self.idx]
+            return self.content[(self.idx-size): (min(self.idx, len(self.content)))]
         except IndexError:
+            self.idx
             return ''
     
     def move(self,pos):
@@ -986,7 +998,7 @@ def inline_parse(text:str)->str:
         
 
         if (t := parse_inline_links(stream,out,c)):
-            out.extend([t, '']) # type:ignore
+            if t != 'l': out.extend([t, '']) # type:ignore
             continue
 
         if (t := parse_inline_autolink(stream, c)):
@@ -997,9 +1009,6 @@ def inline_parse(text:str)->str:
             out.extend([t, '']) # type:ignore
             continue
 
-        if (t := parse_inline_ref_links(stream,c)):
-            out.extend([t,'']) # type:ignore
-            continue
         
         if (t := parse_inline_escape(stream,c)):
             out[-1] += t # type:ignore
@@ -1061,20 +1070,22 @@ def parse_inline_HTML(stream:fakestream, c:str)->str|bool:
     if bite[0:3] == '!--': # comment
         stream.move(-len(bite)+3)
         return '<!--' + eat_until(stream, '-->')
-    if bite[0:5] == '!---': # comment #2
+    elif bite[0:5] == '!---': # comment #2
         stream.move(-len(bite)+5)
         return '<!--->' + eat_until(stream, '-->')
-    if bite[0:4] == '!-->': # comment #3
+    elif bite[0:4] == '!-->': # comment #3
         stream.move(-len(bite)+4)
         return '<!-->' + eat_until(stream, '-->')
-    if bite[0] == '?': # processing instruction
+    elif bite[0] == '?': # processing instruction
         stream.move(-len(bite)+1)
         return '<?' + eat_until(stream, '?>')
-    if bite == '![CDATA[': # CDATA
+    elif bite == '![CDATA[': # CDATA
         return '<![CDATA[' + eat_until(stream, ']]>')
-    if bite[0] == '!': # Declaration
+    elif bite[0] == '!': # Declaration
         stream.move(-len(bite)+1)
         return '<!' + eat_until(stream, '>')
+    else:
+        stream.move(-8) # move back
 
     # regular tags:
     buf = ''
@@ -1088,7 +1099,7 @@ def parse_inline_HTML(stream:fakestream, c:str)->str|bool:
     if is_HTML_tag('<' + buf + '>'):
         return '<' + buf + '>'
     else:
-        stream.move(-len(buf))
+        stream.move(-len(buf)-1)
         return '&lt;'
 
 def eat_until(stream:fakestream, stop:str)->str:
@@ -1126,7 +1137,9 @@ def parse_inline_autolink(stream:fakestream, c:str):
         return f'<a href="{URI_sanitize(link)}">{HTML_sanitize(link)}</a>'
     elif valid_email(link):
         return f'<a href="mailto:{HTML_sanitize(link)}">{HTML_sanitize(link)}</a>'
-    else: return False
+    else: 
+        stream.move(-len(link)-1) # for the strip
+        return False
     
 URI_VALID = '[a-zA-Z0-9!#$&\'()*+,/:;=?@._~-]' # HTML sanitizing takes priority, so those are allowed through
 # trial and error on which reserved characters are allowed...
@@ -1239,7 +1252,7 @@ def parse_inline_linebreak(stream:fakestream, out:list[str], c:str)->bool:
 
     # two+ spaces (or backslash, which is handles in escapes) hard break
     # else soft break
-    if (len(out[-1])>=2 and out[-1][-2:0] == '  ') or (len(out[-1])>=1 and out[-1][-1] == '\t'):
+    if (len(out[-1])>=2 and out[-1][-2:] == '  ') or (len(out[-1])>=1 and out[-1][-1] == '\t'):
         # hard:
         # if we're at EOF then no hard break:
         if stream.read(1) == '':
@@ -1365,6 +1378,7 @@ def parse_inline_emphasis(stream:fakestream, out:list[str], c:str)->str|bool:
     # return the raw string:
     return c * n
 
+# NOT USED ANYMORE
 def parse_inline_ref_links(stream:fakestream, c:str)->str|bool:
     '''Read character, and see if it is an inline reference link,
     by matching with the link_references. checks for full, collapsed, and shortcut links'''
@@ -1386,6 +1400,7 @@ def parse_inline_ref_links(stream:fakestream, c:str)->str|bool:
     if stream.read(1) == '[':
         
         # read until next  ']':
+        buf2.append('[') # for keeping track of what we've read
         
         while (c:=stream.read(1)) != ']':
             if c == '':
@@ -1395,7 +1410,8 @@ def parse_inline_ref_links(stream:fakestream, c:str)->str|bool:
                 break
             buf2.append(c)
             if c == '\\': buf2.append(stream.read(1)) # disregard next from criteria
-        label = "".join(buf2)
+        label = "".join(buf2[1:])
+        buf2.append(']') # so everything we read is in a buffer
 
         # deal with empty label:
         if label == '':
@@ -1403,7 +1419,7 @@ def parse_inline_ref_links(stream:fakestream, c:str)->str|bool:
             text = ''
 
     else:
-        stream.move(-1)
+        stream.move(-1) # move back read of not `[`
         label = text
         text = ''
     
@@ -1416,7 +1432,7 @@ def parse_inline_ref_links(stream:fakestream, c:str)->str|bool:
             break
     else:
         # no reference, no link
-        stream.move(-len(buf))
+        stream.move(-len(buf)-len(buf2)-1)
         return False
     
     # fill in link:
@@ -1424,18 +1440,16 @@ def parse_inline_ref_links(stream:fakestream, c:str)->str|bool:
     if ref['title'] != '': out += f' title="{ref['title']}"'
     return out + f'>{text}</a>'
     
-    
-
-
-
 def parse_inline_links(stream:fakestream,out:list[str], c:str)->str|bool:
-    '''read character, if it starts link, return an emphasis string
-    and add to delimiter stack, if it ends link, do the same'''
+    '''read character, if it starts link, return a link string
+    and add to delimiter stack, if it ends link make link'''
     if not c in ('[','!', ']'): return False
+    # this one's a doosey
     
     # check for `![`:
-    if stream.read(1) == '[':
+    if stream.read(1) == '[' and c == '!':
         c = '!['
+        
     else:
         stream.move(-1)
         return False # let someone else take it
@@ -1459,30 +1473,141 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str)->str|bool:
             delimeter_stack.remove(delim)
             return c
         # now we get to the complicated stuff!
-        # check if valid link, valid link is:
-        # - link text (already know is correct)
-        # - link destination, text between `<>` with no `\n` or unescaped `<>`
-        #   or nonempty sequence of chars, not including ASCII control chars, or space
-        #   and only parentheses if they are escaped or make a balanced pair
-        # - link title, delineated by `"`,`'`, or matching `()`,
-        #   including only the delineator if escaped
-        # links thake the form:
-        # [text]( destination title )
-        # with the spaces here allowed to be:
-        # nonzero number of spaces and tabs, and up to one line ending.
-        # this is then translated to:
-        # <a href="destination" title="title">text</a>
+        
 
-        # images work the same, except they use alt instead of title, and 
-        # "an image description may contain links"
+        link_content = "".join(out[delim['idx']:])
 
-        # TODO:
-        # for now, return literal:
-        return c
+        # check if inline, reference, collapsed, or shortcut
+        buf = [stream.read(1)]
+        match buf[0]:
+
+            case '[':
+                # ref or collapsed
+                buf.append(stream.read(1))
+                if buf[2] == ']': # collapsed
+                    label = link_content
+                    content = link_content
+                    title = '' # let label fill out
+                    dest = ''
+                else:
+                    # ref, read in label
+                    while (c:=stream.read(1)) != ']':
+                        if c == '':
+                            # reached EOF, invalid link
+                            stream.move(-len(buf))
+                            delimeter_stack.remove(delim)
+                            return ']'
+                            
+                        buf.append(c)
+                        if c == '\\': buf.append(stream.read(1)) # disregard next from criteria
+                    label = "".join(buf[1:])
+                    buf.append(']') # so everything we read is in a buffer
+                    content = link_content
+                    title = ''
+                    dest = ''
+            case '(':
+                # inline, next part is optional link destination and optional link title, followed by `)`
+                label = ''
+                content = link_content
+                # bracketed destination?
+                buf.append(stream.read(1))
+                if buf[1] == '<':
+                    # bracketed destination
+                    # read until non-backspaced `>`
+                    while (c := stream.read(1)) != '>':
+                        buf.append(c)
+                        if c == '\\': buf.append(stream.read(1))
+                        if c == '':
+                            # EOF, invalid
+                            stream.move(-len(buf))
+                            delimeter_stack.remove(delim)
+                            return ']'
+                    buf.append(c) # put everything read in buffer
+                    # end of dest:
+                    dest = "".join(buf[2:-1])
+                else: # unbracketed, count parentheses
+                    count = 1
+                    while True:
+                        c = stream.read(1)
+                        buf.append(c)
+                        if ord(c) <= 0x1F or c in ('\u007F', ' '):break
+                        if c == '(': count += 1
+                        elif c == ')': count -=1
+                        if count < 0: # invalid parentheses
+                            stream.move(-len(buf))
+                            delimeter_stack.remove(delim)
+                            return ']'
+                    dest = ''.join(buf[2:-1])
+                # now it's title time, eat whitespace first:
+                while (c:=stream.read(1)).strip() == '':
+                    buf.append(c)
+                buf.append(c) # first part of title
+                tit_start = len(buf) 
+                match c:
+                    case '"': end = '"'
+                    case "'": end = "'"
+                    case '(': end = ')'
+                    case _:
+                        # invalid!
+                        stream.move(-len(buf))
+                        delimeter_stack.remove(delim)
+                        return ']'
+                        pass
+                while (c := stream.read(1)) != end:
+                    buf.append(c)
+                    if c == '\\': buf.append(stream.read(1)) # ignore escaped chars
+                    if c == '':
+                        # EOF, invalid
+                        stream.move(-len(buf))
+                        delimeter_stack.remove(delim)
+                        return ']'
+                buf.append(c)
+                title = buf[tit_start+1:-1]         
+            case _:
+                # shortcut
+                stream.move(-1) # back up
+                label=link_content
+                content = link_content
+                title=""
+                dest=""
+        
+        # fill in if label
+        if label != '':
+            for l in link_references:
+                if label_collapse(label) == l['label']:
+                    if l['title'] != '': title = l['title']
+                    dest = l['dest']
+
+        # have valid, close out TODO
+        
+        # add to out and clear it:
+        out = out[:delim['idx']]
+        image = (delim['type'] == '![')
+        if image: # image
+            out.append(f'<img stc="{dest}"' + f' alt="{content}"'(
+                f' title="{title}"' if title != '' else ''
+            ) + ' />')
+        else:
+            out.append(f'<a href="{dest}"' + (
+                f' title="{title}"' if title != '' else ''
+            ) + f'>{content}</a>')
+
+        # process emphasis on inside:
+        delim_idx = delimeter_stack.index(delim)
+        process_emphasis(out,delim_idx)
+
+        # remove delimeter:
+        delimeter_stack.remove(delim)
+
+        # inactivate links if not image:
+        if not image:
+            for d in delimeter_stack[:delim_idx]:
+                d['active'] = False
+
+        return 'l' # sign that we succeeded for inline parser
 
 
-    else:
-        # found none, insert literal:
+    else: # found none, insert literal:
         return c
 
 def process_emphasis(out:list[str], stack_bottom:int = -1):
