@@ -4,6 +4,8 @@ utilities, not required to be in the main file
 import re
 
 
+ASCII_PUNCTUATION_ESCAPE = r'\\[!"#$%&\'()*+,-./:;<=>?@\[\\\]\^_`{|}~]'
+
 ATTRIBUTE_START = r"[a-zA-Z_.:-]+"
 ATTRIBUTE_PATTERN = r"[a-zA-Z_:]"
 UVALUE_SET = ('"', "'", '=', '<', '>', '`')
@@ -217,3 +219,10 @@ def label_collapse(label:str)->str:
     label = label.casefold().strip().replace('\t',' ').replace('\n',' ')
     label = " ".join(label.split())
     return label
+
+if __name__ == "__main__":
+    teststr = r'bla\* foo\%, zap \@'
+
+    while m := re.search(ASCII_PUNCTUATION_ESCAPE,teststr):
+        print(teststr[m.start():m.end()])
+        

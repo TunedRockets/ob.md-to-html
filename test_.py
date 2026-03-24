@@ -35,7 +35,7 @@ def test_check(specs):
 if __name__ == "__main__":
 
     # test individual test:
-    id = 17
+    id = 22
     test_check(spec[id])
 
 # top number passed: 334 (more passed than failed!)

@@ -362,7 +362,6 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)-
         
     else:
         stream.move(-1)
-        return False # let someone else take it
     
     if c in ('[', '!['):
         # start of link
@@ -385,7 +384,7 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)-
         # now we get to the complicated stuff!
         
 
-        link_content = "".join(out[delim['idx']:])
+        link_content = "".join(out[delim['idx']:])[1:]
 
         # check if inline, reference, collapsed, or shortcut
         buf = [stream.read(1)]
@@ -472,7 +471,7 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)-
                         delimeter_stack.remove(delim)
                         return ']'
                 buf.append(c)
-                title = buf[tit_start+1:-1]         
+                title = ''.join(buf[tit_start+1:-1])         
             case _:
                 # shortcut
                 stream.move(-1) # back up
@@ -488,19 +487,22 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)-
                     if l['title'] != '': title = l['title']
                     dest = l['dest']
 
-        # have valid, close out TODO
+        # have valid, close out
+        
+        # check title and destination for escapes:
+        while re.
         
         # add to out and clear it:
         out = out[:delim['idx']]
         image = (delim['type'] == '![')
         if image: # image
-            out.append(f'<img stc="{dest}"' + f' alt="{content}"'(
-                f' title="{title}"' if title != '' else ''
-            ) + ' />')
+            out.append(f'<img stc="{dest}"' + f' alt="{content}"'+ 
+                (f' title="{title}"' if title != '' else '') + 
+                ' />')
         else:
-            out.append(f'<a href="{dest}"' + (
-                f' title="{title}"' if title != '' else ''
-            ) + f'>{content}</a>')
+            out.append(f'<a href="{dest}"' + 
+                (f' title="{title}"' if title != '' else '') + 
+                f'>{content}</a>')
 
         # process emphasis on inside:
         delim_idx = delimeter_stack.index(delim)
