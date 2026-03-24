@@ -34,6 +34,21 @@ class fakestream:
         '''moves index by given amount'''
         self.idx += pos
 
+def eat_until(stream:fakestream, stop:str)->str:
+    '''Will read from the stream until the specified string is reached
+    then return everything up to and including the string.
+    if string not found, will move back read to start'''
+    buf = stream.read(len(stop))
+    while buf[-len(stop):] != stop:
+        if (c := stream.read(1)) != '':
+            buf += c
+        else:
+            # reached eof, go back
+            stream.move(-len(buf)-2)
+            return ''
+    return buf
+
+delimeter_stack = []
 def inline_parse(text:str, link_references)->str:
     '''runs the inline parse on the text, in order to (in order of precedence):
     - insert code spans
@@ -48,6 +63,8 @@ def inline_parse(text:str, link_references)->str:
 
     Version 2
     '''
+    global delimeter_stack
+    delimeter_stack = [] # reset stack
 
     out = [""] # improvement over v1, out is a list of strings
     # better this than a linked list and allows some pointer-like things
@@ -109,28 +126,30 @@ def parse_inline_code(stream:fakestream, c:str)->str|bool:
     # count length of ticks:
     n = char_counter(stream, '`') + 1
     # found ticks, read into buffer until similar length found:
-    buf = ''
+    buf = []
     while (d := stream.read(1)) != '':
         if d != '`':
             # just insert regular characters (except make newlines to space)
             # and sanitize it as html
-            buf += (d if d != '\n' else ' ')
+            buf.append(d if d != '\n' else ' ')
             continue
         # else:
         m = char_counter(stream, '`') + 1 # number of ticks
         if m == n:
             # was matching, return buffer and tags
+            out = ''.join(buf)
 
             # do space stripping rule.
-            if buf[0] == ' ' and buf[-1] == ' ' and buf.replace(' ','') != '':
-                buf = buf[1:-1]
+            if out[0] == ' ' and out[-1] == ' ' and out.replace(' ','') != '':
+                out = out[1:-1]
 
-            return '<code>' + HTML_sanitize(buf) + '</code>'
+            return '<code>' + HTML_sanitize(out) + '</code>'
         else:
             # just treat tags literally:
-            buf += '`'*m
+            buf.extend(['`']*m)
             continue
     # reached EOF, back up and ticks as literal:
+    if d == '': stream.move(-1) # special case hit EOF
     stream.move(-len(buf))
     return '`' * n
 
@@ -141,15 +160,15 @@ def parse_inline_HTML(stream:fakestream, c:str)->str|bool:
 
     # check ahead if special tag:
     bite = stream.read(8)
-    if bite[0:3] == '!--': # comment
+    if bite[0:4] == '!---': # closed comment
+        stream.move(-len(bite)+5)
+        return '<!--->'
+    elif bite[0:4] == '!-->': # closed comment #2
+        stream.move(-len(bite)+4)
+        return '<!-->'
+    elif bite[0:3] == '!--': # comment
         stream.move(-len(bite)+3)
         return '<!--' + eat_until(stream, '-->')
-    elif bite[0:5] == '!---': # comment #2
-        stream.move(-len(bite)+5)
-        return '<!--->' + eat_until(stream, '-->')
-    elif bite[0:4] == '!-->': # comment #3
-        stream.move(-len(bite)+4)
-        return '<!-->' + eat_until(stream, '-->')
     elif bite[0] == '?': # processing instruction
         stream.move(-len(bite)+1)
         return '<?' + eat_until(stream, '?>')
@@ -176,18 +195,6 @@ def parse_inline_HTML(stream:fakestream, c:str)->str|bool:
         stream.move(-len(buf)-1)
         return '&lt;'
 
-def eat_until(stream:fakestream, stop:str)->str:
-    '''Will read from the stream until the specified string is reached
-    then return everything up to and including the string'''
-    buf = stream.read(len(stop))
-    while buf[-len(stop):] != stop:
-        if (c := stream.read(1)) != '':
-            buf += c
-        else:
-            # reached eof, go back
-            stream.move(-len(buf))
-            return ''
-    return buf
 
 def parse_inline_autolink(stream:fakestream, c:str):
     '''autolinks are links within `<>` brackets.
@@ -201,9 +208,7 @@ def parse_inline_autolink(stream:fakestream, c:str):
     if c != '<': return False
 
     link = eat_until(stream,'>')
-    if link[-1] != '>':
-        # hit EOF, invalid:
-        stream.move(-len(link))
+    if link == '': # Hit EOF, invalid
         return False
     link = link[:-1] # strip `>`
     # else check for valid link or email:
@@ -215,7 +220,6 @@ def parse_inline_autolink(stream:fakestream, c:str):
         stream.move(-len(link)-1) # for the strip
         return False
     
-
 def parse_inline_linebreak(stream:fakestream, out:list[str], c:str)->bool:
     '''reads linbreak, and if it is figures out if it's soft or hard,
     then cleans out appropriately'''
@@ -302,10 +306,12 @@ def parse_inline_char_ref(stream:fakestream, c:str):
         stream.move(-len(buf) - 1)
         return False
 
-delimeter_stack = []
+
 def parse_inline_emphasis(stream:fakestream, out:list[str], c:str)->str|bool:
     '''read character, if it starts emphasis, return an emphasis string
     and add to delimiter stack'''
+    global delimeter_stack
+
     
     if not c in ('*','_'): return False
 
@@ -356,6 +362,8 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)-
     and add to delimiter stack, if it ends link make link'''
     if not c in ('[','!', ']'): return False
     # this one's a doosey
+    global delimeter_stack
+
     
     # check for `![`:
     if stream.read(1) == '[' and c == '!':
@@ -421,6 +429,7 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)-
                 content = link_content
                 # bracketed destination?
                 buf.append(stream.read(1))
+                count = 0 # needed for later
                 if buf[1] == '<':
                     # bracketed destination
                     # read until non-backspaced `>`
@@ -436,43 +445,59 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)-
                     # end of dest:
                     dest = "".join(buf[2:-1])
                 else: # unbracketed, count parentheses
-                    count = 1
-                    while True:
-                        c = stream.read(1)
+                    # edge case with empty link:
+                    if buf[1] == ')':
+                        dest = ''
+                        count = -1
+                        c = ')'
+                    else:
+                        while True:
+                            c = stream.read(1)
+                            buf.append(c)
+                            if ord(c) <= 0x1F or c in ('\u007F', ' '):break
+                            if c == '(': count += 1
+                            elif c == ')': count -=1
+                            if count < 0: # end parenthesis
+                                break
+                        dest = ''.join(buf[1:-1])
+                # now it's title time, eat whitespace first (if count not negative):
+                if count >= 0:
+                    while (c:=stream.read(1)).strip() == '':
+                        if c == '': break # EOF
                         buf.append(c)
-                        if ord(c) <= 0x1F or c in ('\u007F', ' '):break
-                        if c == '(': count += 1
-                        elif c == ')': count -=1
-                        if count < 0: # invalid parentheses
+                    buf.append(c) # first part of ev. title
+                if c != ')': # check for title
+                    tit_start = len(buf) 
+                    match c:
+                        case '"': end = '"'
+                        case "'": end = "'"
+                        case '(': end = ')'
+                        case _:
+                            # invalid!
                             stream.move(-len(buf))
                             delimeter_stack.remove(delim)
                             return ']'
-                    dest = ''.join(buf[2:-1])
-                # now it's title time, eat whitespace first:
-                while (c:=stream.read(1)).strip() == '':
+                            pass
+                    while (c := stream.read(1)) != end:
+                        buf.append(c)
+                        if c == '\\': buf.append(stream.read(1)) # ignore escaped chars
+                        if c == '':
+                            # EOF, invalid
+                            stream.move(-len(buf))
+                            delimeter_stack.remove(delim)
+                            return ']'
                     buf.append(c)
-                buf.append(c) # first part of title
-                tit_start = len(buf) 
-                match c:
-                    case '"': end = '"'
-                    case "'": end = "'"
-                    case '(': end = ')'
-                    case _:
+                    title = ''.join(buf[tit_start:-1])  
+                    # check for end parenthesis (and eat space):
+                    while (c:= stream.read(1)).strip() == "": buf.append(c)
+                    if c != ')':
                         # invalid!
-                        stream.move(-len(buf))
+                        stream.move(-len(buf)-1)
                         delimeter_stack.remove(delim)
                         return ']'
-                        pass
-                while (c := stream.read(1)) != end:
-                    buf.append(c)
-                    if c == '\\': buf.append(stream.read(1)) # ignore escaped chars
-                    if c == '':
-                        # EOF, invalid
-                        stream.move(-len(buf))
-                        delimeter_stack.remove(delim)
-                        return ']'
-                buf.append(c)
-                title = ''.join(buf[tit_start:-1])         
+                else: # no title
+                    title = ''
+                
             case _:
                 # shortcut
                 stream.move(-1) # back up
