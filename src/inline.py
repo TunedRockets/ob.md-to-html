@@ -66,7 +66,8 @@ def inline_parse(text:str, link_references)->str:
         
 
         if (t := parse_inline_links(stream,out,c, link_references)):
-            if t != 'l': out.extend([t, '']) # type:ignore
+            if isinstance(t, list): out = t
+            else: out.extend([t, '']) # type:ignore
             continue
 
         if (t := parse_inline_autolink(stream, c)):
@@ -350,7 +351,7 @@ def parse_inline_emphasis(stream:fakestream, out:list[str], c:str)->str|bool:
     return c * n
 
 
-def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)->str|bool:
+def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)->str|bool|list[str]:
     '''read character, if it starts link, return a link string
     and add to delimiter stack, if it ends link make link'''
     if not c in ('[','!', ']'): return False
@@ -471,7 +472,7 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)-
                         delimeter_stack.remove(delim)
                         return ']'
                 buf.append(c)
-                title = ''.join(buf[tit_start+1:-1])         
+                title = ''.join(buf[tit_start:-1])         
             case _:
                 # shortcut
                 stream.move(-1) # back up
@@ -490,7 +491,11 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)-
         # have valid, close out
         
         # check title and destination for escapes:
-        while re.
+        while m := re.search(ASCII_PUNCTUATION_ESCAPE,title):
+            title = title.replace(m[0],m[0][1])
+
+        while m := re.search(ASCII_PUNCTUATION_ESCAPE,dest):
+            dest = dest.replace(m[0],m[0][1])
         
         # add to out and clear it:
         out = out[:delim['idx']]
@@ -516,7 +521,7 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)-
             for d in delimeter_stack[:delim_idx]:
                 d['active'] = False
 
-        return 'l' # sign that we succeeded for inline parser
+        return out # sign that we succeeded for inline parser
 
 
     else: # found none, insert literal:

@@ -225,4 +225,5 @@ if __name__ == "__main__":
 
     while m := re.search(ASCII_PUNCTUATION_ESCAPE,teststr):
         print(teststr[m.start():m.end()])
+        teststr = teststr.replace(m[0],m[0][1])
         
