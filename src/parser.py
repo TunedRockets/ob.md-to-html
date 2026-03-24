@@ -372,7 +372,7 @@ class Block():
         indented code blocks are lines beginning with 4 indentations, followed by arbitrary text.
         Indented code blocks cannot interrupt paragraphs'''
 
-        if isinstance(self, Paragraph): return False
+        if isinstance(self, Paragraph) and self.open: return False
 
         # if tab is involved, spaces before tabs are not carried through
         st = Block.current_line[0:4] # relevant part

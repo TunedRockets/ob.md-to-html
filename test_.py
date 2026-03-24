@@ -35,8 +35,8 @@ def test_check(specs):
 if __name__ == "__main__":
 
     # test individual test:
-    id = 14
+    id = 17
     test_check(spec[id])
 
-# top passed: 323
+# top number passed: 334 (more passed than failed!)
 # < 11 is tab issues

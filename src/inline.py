@@ -113,12 +113,17 @@ def parse_inline_code(stream:fakestream, c:str)->str|bool:
         if d != '`':
             # just insert regular characters (except make newlines to space)
             # and sanitize it as html
-            buf += (d if d != '\n' else ' ') 
+            buf += (d if d != '\n' else ' ')
             continue
         # else:
         m = char_counter(stream, '`') + 1 # number of ticks
         if m == n:
             # was matching, return buffer and tags
+
+            # do space stripping rule.
+            if buf[0] == ' ' and buf[-1] == ' ' and buf.replace(' ','') != '':
+                buf = buf[1:-1]
+
             return '<code>' + HTML_sanitize(buf) + '</code>'
         else:
             # just treat tags literally:
@@ -231,7 +236,7 @@ def parse_inline_linebreak(stream:fakestream, out:list[str], c:str)->bool:
         out[-1] = out[-1].rstrip() + '\n'
         
     # get rid of next spaces:
-    while stream.read(1) == ' ': pass
+    while (c := stream.read(1)) == ' ': pass
     stream.move(-1) # move back to read new line
     return True
 
