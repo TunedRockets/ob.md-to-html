@@ -197,17 +197,22 @@ class Block():
         # list block:        
         if m := self.is_list_item():
             # now figure out if new block or not
-            if isinstance(self, List_Block) and self.marker_belongs(m):
-                # same list, keep going
-                return List_item(self,m)
-            elif isinstance(self,List_item) and self.parent.marker_belongs(m): # type:ignore
-                # in case we're in the item
-                return List_item(self.parent,m) # type:ignore
-            else:
-                # new list, "add" list_block (constructor takes care of proper ordering)
-                b = List_Block(self,m)
-                return List_item(b,m)
-        
+
+            # if just new item, then self.parent.parent is the list block (p->li->ul)
+            # or if we just had a heading or something, then self.parent (li->ul)
+            if isinstance(self,Paragraph) and isinstance(self.parent, List_item):
+                l:List_Block = self.parent.parent # type:ignore
+                if l.marker_belongs(m):
+                    return List_item(l, m) 
+            elif isinstance(self, List_item):
+                l:List_Block = self.parent # type:ignore
+                if l.marker_belongs(m):
+                    return List_item(l, m) 
+            # else:
+            # new list, "add" list_block (constructor takes care of proper ordering)
+            b = List_Block(self,m)
+            return List_item(b,m)
+    
         if i := self.is_ATX_heading():
             return ATX_heading(self, i)
         
@@ -303,7 +308,10 @@ class Block():
         thematic breaks are up to three spaces of indentation, followed by 3 or more 
         matching `-`, `_`, or `*` characters, followed by any number of spaces and tabs'''
 
-        
+        # check indent:
+        if Block.current_line[0:4].strip() == '': return False # too much indent
+
+
         # now strip of whitespace and check for characters:
         l = Block.current_line.strip().replace(" ", "").replace("\t", "") # spaces and tabs allowed between
 
@@ -655,7 +663,7 @@ class Indented_code_block(Block):
         # trim empty lines: (should only trim start and end lines)
         l = '\n'.join(filter(None,self.contents.split('\n'))) 
 
-        return "<pre><code>" + sanitize_text(l,False,False,True) + ("</code></pre>" if l[-1] == '\n' else "\n</code></pre>")
+        return "<pre><code>" + replace_danger(l) + ("</code></pre>" if l[-1] == '\n' else "\n</code></pre>")
 
 class Fenced_code_block(Block):
 

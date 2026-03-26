@@ -25,9 +25,13 @@ spec = load_data()
 @pytest.mark.parametrize('specs', spec)
 def test_check(specs):
 
-    md = StringIO(specs['markdown'])
-    html:str = specs['html']
-    guess = parse_md(md) # 
+    md = specs['markdown']
+    html:str = specs['html'] # padd
+    guess = parse_md(StringIO(md))
+    if __name__ == "__main__":
+        print(guess)
+        print("--------- /\\guess/\\ ----- \\/key\\/ ------------")
+        print(html)
     assert guess.strip() == html.strip()
 
 
@@ -35,8 +39,8 @@ def test_check(specs):
 if __name__ == "__main__":
 
     # test individual test:
-    id = 25
+    id = 57
     test_check(spec[id])
 
-# top number passed: 373 (more passed than failed!)
+# top number passed: 401 (more passed than failed!)
 # < 11 is tab issues

@@ -38,10 +38,9 @@ def is_HTML_tag(tag:str)->bool:
     if len(name) < 2: return False
     if name[1] == '/':
         # closing tag, that's easy
-        if tag.rstrip()[-1] != '>': return False
-        # otherwise just check that name is valid name
+        # just check that name is valid name
 
-        if is_HTML_tag_name(name[2:].rstrip('>')):
+        if is_HTML_tag_name(name[2:]):
             return True
         else:
             return False
@@ -129,7 +128,7 @@ def URI_sanitize(link:str):
     '''superset of HTML sanitize that also replaces non-allowed characters with % replacements'''
     out = []
     for c in link:
-        if re.fullmatch(URI_VALID,c): out.append(sanitize_text(c,False,False,True))
+        if re.fullmatch(URI_VALID,c): out.append(replace_danger(c))
         else:
             # split up in UTF-8 bytes, each byte encoded in hex after a percent
             for b in c.encode():
@@ -139,7 +138,7 @@ def URI_sanitize(link:str):
 
 
 HTML_REF_WORD = r'[^\\](\\\\)*(&[a-zA-Z0-9]+;)' # will not match if first in string so make sure to pad
-HTML_REF_DIGIT = r'[^\\](\\\\)*(&#X?[a-fA-F0-9]{1,7};)'
+HTML_REF_DIGIT = r'[^\\](\\\\)*(&#[Xx]?[a-fA-F0-9]{1,7};)'
 ASCII_PUNCTUATION_ESCAPE = r'\\[!"#$%&\'()*+,-./:;<=>?@\[\\\]\^_`{|}~]'
 HTML_Danger = {'"': "&quot;", '&': "&amp;", '<': "&lt;", '>': "&gt;", '\u0000' : '\uFFFD'}
 def sanitize_text(s:str, escape:bool=True, resolve_refs:bool=True, replace_dangerous:bool=True)->str:
@@ -157,22 +156,30 @@ def sanitize_text(s:str, escape:bool=True, resolve_refs:bool=True, replace_dange
                 tgt = "".join(m)
                 val = "".join(m[:-1]) + HTML_ENTITIES[m[-1]]['characters']
                 s = s.replace(tgt,val) # keep ignored backslashes
-        mm = re.findall(HTML_REF_DIGIT,s)
+        mm = re.findall(HTML_REF_DIGIT,' '+ s)
         for m in mm:
-            i = int(m[3:-1],16) if m[2] in ('X','x') else int(m[2:-1])
-            s = s.replace(m,chr(i))
+            try:
+                i = int(m[-1][3:-1],16) if m[-1][2] in ('X','x') else int(m[-1][2:-1])
+                tgt = "".join(m)
+                val = "".join(m[:-1]) + chr(i) # TODO: does not repace invalid characters with \uFFFD
+                s = s.replace(tgt,val) # keep ignored backslashes
+            except ValueError: pass # for the case of gibberish hex-dec
     if escape:
         mm = re.findall(ASCII_PUNCTUATION_ESCAPE, s)
         while (m:= re.search(ASCII_PUNCTUATION_ESCAPE, s)):
                 s = s.replace(m[0],m[0][1])
     if replace_dangerous: # might be a better way but this works
-        o = []
-        for c in s:
-            if c in HTML_Danger.keys(): o.append(HTML_Danger[c])
-            else: o.append(c)
-        s = "".join(o)
+        s = replace_danger(s)
 
     return s
+
+def replace_danger(s:str)->str:
+    '''replaces dangerous HTML characters with safe counterparts'''
+    o = []
+    for c in s:
+        if c in HTML_Danger.keys(): o.append(HTML_Danger[c])
+        else: o.append(c)
+    return "".join(o)
 
 SCHEME_PATTERN = r'[a-zA-Z+.-]{2,32}'
 URI_NOMATCH = r'[\u0000-\u001F\u007f <>]'
@@ -249,7 +256,7 @@ def label_collapse(label:str)->str:
     return label
 
 if __name__ == "__main__":
-    teststr = '&check; \\&Cross; \\\\&checkmark; \\\\\\&not; \\a\\&nrightarrow;'
+    teststr = '&#xcab;'
     print(sanitize_text(teststr))
 
     

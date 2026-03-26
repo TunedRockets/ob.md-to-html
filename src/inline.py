@@ -11,42 +11,7 @@ import json
 with open(Path(__file__).parent.joinpath("entities.json")) as file:
     HTML_ENTITIES:dict = json.load(file)
 
-class fakestream:
-    '''stream-like interface for a string, to enable character by character parsing'''
 
-    def __init__(self, content) -> None:
-        self.content=content
-        self.idx = 0
-    
-    def read(self, size):
-        '''reads 'size' items out of the content'''
-        try:
-            if size == 1:
-                self.idx += 1
-                return self.content[self.idx-1]
-            self.idx += size
-            return self.content[(self.idx-size): (min(self.idx, len(self.content)))]
-        except IndexError:
-            self.idx
-            return ''
-    
-    def move(self,pos):
-        '''moves index by given amount'''
-        self.idx += pos
-
-def eat_until(stream:fakestream, stop:str)->str:
-    '''Will read from the stream until the specified string is reached
-    then return everything up to and including the string.
-    if string not found, will move back read to start'''
-    buf = stream.read(len(stop))
-    while buf[-len(stop):] != stop:
-        if (c := stream.read(1)) != '':
-            buf += c
-        else:
-            # reached eof, go back
-            stream.move(-len(buf)-2)
-            return ''
-    return buf
 
 delimeter_stack = []
 def inline_parse(text:str, link_references)->str:
@@ -108,7 +73,7 @@ def inline_parse(text:str, link_references)->str:
             continue
         
         # else:
-        out[-1] += sanitize_text(c,False,False,True) # check for danger
+        out[-1] += replace_danger(c) # check for danger
 
     process_emphasis(out, -1)
     # remove end breaks:
@@ -117,6 +82,43 @@ def inline_parse(text:str, link_references)->str:
     out[-1] = out[-1].rstrip()
 
     return ''.join(out)
+
+class fakestream:
+    '''stream-like interface for a string, to enable character by character parsing'''
+
+    def __init__(self, content) -> None:
+        self.content=content
+        self.idx = 0
+    
+    def read(self, size):
+        '''reads 'size' items out of the content'''
+        try:
+            if size == 1:
+                self.idx += 1
+                return self.content[self.idx-1]
+            self.idx += size
+            return self.content[(self.idx-size): (min(self.idx, len(self.content)))]
+        except IndexError:
+            self.idx
+            return ''
+    
+    def move(self,pos):
+        '''moves index by given amount'''
+        self.idx += pos
+
+def eat_until(stream:fakestream, stop:str)->str:
+    '''Will read from the stream until the specified string is reached
+    then return everything up to and including the string.
+    if string not found, will move back read to start'''
+    buf = stream.read(len(stop))
+    while buf[-len(stop):] != stop:
+        if (c := stream.read(1)) != '':
+            buf += c
+        else:
+            # reached eof, go back
+            stream.move(-len(buf)-2)
+            return ''
+    return buf
 
 def parse_inline_code(stream:fakestream, c:str)->str|bool:
     '''read character, and if it's inline code, returns the resulting string.
@@ -143,7 +145,7 @@ def parse_inline_code(stream:fakestream, c:str)->str|bool:
             if out[0] == ' ' and out[-1] == ' ' and out.replace(' ','') != '':
                 out = out[1:-1]
 
-            return '<code>' + sanitize_text(out,False,False,True) + '</code>'
+            return '<code>' + replace_danger(out) + '</code>'
         else:
             # just treat tags literally:
             buf.extend(['`']*m)
@@ -213,9 +215,9 @@ def parse_inline_autolink(stream:fakestream, c:str):
     link = link[:-1] # strip `>`
     # else check for valid link or email:
     if valid_URI_link(link):
-        return f'<a href="{URI_sanitize(link)}">{sanitize_text(link)}</a>'
+        return f'<a href="{URI_sanitize(link)}">{replace_danger(link)}</a>'
     elif valid_email(link):
-        return f'<a href="mailto:{sanitize_text(link,False,False,True)}">{sanitize_text(link,False,False,True)}</a>'
+        return f'<a href="mailto:{replace_danger(link)}">{replace_danger(link)}</a>'
     else: 
         stream.move(-len(link)-1) # for the strip
         return False
@@ -265,7 +267,7 @@ def parse_inline_escape(stream:fakestream, c:str)->str|bool:
             stream.move(-2) # for both forward reads
             return '  '
     else:
-        return sanitize_text(c,False,False,True)
+        return replace_danger(c)
     
 def parse_inline_char_ref(stream:fakestream, c:str):
     '''checks if the following is a valid HTML character unicode referece.
@@ -284,10 +286,11 @@ def parse_inline_char_ref(stream:fakestream, c:str):
             return False
     txt = ''.join(buf) + ';'
     
+    
     if re.match(HTML_REF_WORD, ' '+txt) or re.match(HTML_REF_DIGIT, ' '+txt):
         return sanitize_text(txt,True,True,True) # will resolve the value
     # else:
-    stream.move(-len(buf)+1)
+    stream.move(-len(buf))
     return False
 
 
