@@ -213,9 +213,9 @@ def parse_inline_autolink(stream:fakestream, c:str):
     link = link[:-1] # strip `>`
     # else check for valid link or email:
     if valid_URI_link(link):
-        return f'<a href="{URI_sanitize(link)}">{HTML_sanitize(link)}</a>'
+        return f'<a href="{URI_sanitize(link)}">{sanitize_text(link)}</a>'
     elif valid_email(link):
-        return f'<a href="mailto:{HTML_sanitize(link)}">{HTML_sanitize(link)}</a>'
+        return f'<a href="mailto:{sanitize_text(link,False,False,True)}">{sanitize_text(link,False,False,True)}</a>'
     else: 
         stream.move(-len(link)-1) # for the strip
         return False
@@ -265,7 +265,7 @@ def parse_inline_escape(stream:fakestream, c:str)->str|bool:
             stream.move(-2) # for both forward reads
             return '  '
     else:
-        return HTML_sanitize(c)
+        return sanitize_text(c,False,False,True)
     
 def parse_inline_char_ref(stream:fakestream, c:str):
     '''checks if the following is a valid HTML character unicode referece.
@@ -282,7 +282,7 @@ def parse_inline_char_ref(stream:fakestream, c:str):
             # reached EOF, it's invalid so back up
             stream.move(-len(buf)+1)
             return False
-    txt = ''.join(buf)
+    txt = ''.join(buf) + ';'
     
     if re.match(HTML_REF_WORD, ' '+txt) or re.match(HTML_REF_DIGIT, ' '+txt):
         return sanitize_text(txt,True,True,True) # will resolve the value
@@ -378,7 +378,7 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)-
         # now we get to the complicated stuff!
         
 
-        link_content = "".join(out[delim['idx']:])[1:]
+        link_content = "".join(out[delim['idx']:])[len(delim['type']):]
 
         # check if inline, reference, collapsed, or shortcut
         buf = [stream.read(1)]
@@ -387,7 +387,7 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)-
             case '[':
                 # ref or collapsed
                 buf.append(stream.read(1))
-                if buf[2] == ']': # collapsed
+                if buf[1] == ']': # collapsed
                     label = link_content
                     content = link_content
                     title = '' # let label fill out
@@ -511,7 +511,7 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)-
         out = out[:delim['idx']]
         image = (delim['type'] == '![')
         if image: # image
-            out.append(f'<img stc="{dest}"' + f' alt="{content}"'+ 
+            out.append(f'<img src="{dest}"' + f' alt="{content}"'+ 
                 (f' title="{title}"' if title != '' else '') + 
                 ' />')
         else:
