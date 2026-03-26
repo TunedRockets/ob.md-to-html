@@ -108,7 +108,7 @@ def inline_parse(text:str, link_references)->str:
             continue
         
         # else:
-        out[-1] += HTML_sanitize(c)
+        out[-1] += sanitize_text(c,False,False,True) # check for danger
 
     process_emphasis(out, -1)
     # remove end breaks:
@@ -143,7 +143,7 @@ def parse_inline_code(stream:fakestream, c:str)->str|bool:
             if out[0] == ' ' and out[-1] == ' ' and out.replace(' ','') != '':
                 out = out[1:-1]
 
-            return '<code>' + HTML_sanitize(out) + '</code>'
+            return '<code>' + sanitize_text(out,False,False,True) + '</code>'
         else:
             # just treat tags literally:
             buf.extend(['`']*m)
@@ -270,41 +270,26 @@ def parse_inline_escape(stream:fakestream, c:str)->str|bool:
 def parse_inline_char_ref(stream:fakestream, c:str):
     '''checks if the following is a valid HTML character unicode referece.
     if yes returns the unicode character, else move back stream
-    and return false'''
+    and return false.
+    
+    Uses the sanitize from the utils module'''
     if c != '&': return False
     # grab until semicolon:
-    buf = ''
+    buf = [c]
     while (c1 := stream.read(1)) != ';':
+        buf.append(c1)
         if c1 == '':
             # reached EOF, it's invalid so back up
-            stream.move(-len(buf)-1)
+            stream.move(-len(buf)+1)
             return False
-        buf += c1
-    # figure out if it's valid:
-     # is is a numerical code?
-    try:
-        if buf[0] == "#":
-            if buf[1] in ('X', 'x'):
-                # hex value:
-                num = int(buf[2:],16)
-            else:
-                num = int(buf[1:],10)
-            # now convert to unicode (unless zero in which case U+FFFD)
-            if num == 0: 
-                return '\uFFFD'
-            else:
-                return HTML_sanitize(chr(num))
-        # buffer is now content of the id
-        elif '&' + buf + ';' in HTML_ENTITIES.keys():
-            return HTML_sanitize(HTML_ENTITIES['&' + buf + ';']["characters"])
-        else:
-            # not a HTML reference, go back and add it literally:
-            stream.move(-len(buf) - 1)
-            return False
-    except (ValueError,IndexError):
-        # invalid number code, go back:
-        stream.move(-len(buf) - 1)
-        return False
+    txt = ''.join(buf)
+    
+    if re.match(HTML_REF_WORD, ' '+txt) or re.match(HTML_REF_DIGIT, ' '+txt):
+        return sanitize_text(txt,True,True,True) # will resolve the value
+    # else:
+    stream.move(-len(buf)+1)
+    return False
+
 
 
 def parse_inline_emphasis(stream:fakestream, out:list[str], c:str)->str|bool:
@@ -516,9 +501,9 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)-
         # have valid, close out
         
         # check title and destination for escapes, and sanitize
-        title = ascii_escape(resolve_HTML_char_refs(title))
-        dest = ascii_escape(resolve_HTML_char_refs(dest))
-        # more sanitizing:
+        title = sanitize_text(title)
+        dest = sanitize_text(dest)
+        # more sanitizing for URI specifically:
         dest = URI_sanitize(dest)
 
 

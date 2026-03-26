@@ -8,13 +8,7 @@ import json
 with open(Path(__file__).parent.joinpath("entities.json")) as file:
     HTML_ENTITIES:dict = json.load(file)
 
-ASCII_PUNCTUATION_ESCAPE = r'\\[!"#$%&\'()*+,-./:;<=>?@\[\\\]\^_`{|}~]'
-def ascii_escape(s:str)->str:
-    '''returns a copy with escaped ASCII puctuation replaced with the literal punctuation'''
-    mm = re.findall(ASCII_PUNCTUATION_ESCAPE, s)
-    for m in mm:
-            s = s.replace(m,m[1])
-    return s
+
 
 ATTRIBUTE_START = r"[a-zA-Z_.:-]+"
 ATTRIBUTE_PATTERN = r"[a-zA-Z_:]"
@@ -135,45 +129,50 @@ def URI_sanitize(link:str):
     '''superset of HTML sanitize that also replaces non-allowed characters with % replacements'''
     out = []
     for c in link:
-        if re.fullmatch(URI_VALID,c): out.append(HTML_sanitize(c))
+        if re.fullmatch(URI_VALID,c): out.append(sanitize_text(c,False,False,True))
         else:
             # split up in UTF-8 bytes, each byte encoded in hex after a percent
             for b in c.encode():
                 out.append(f'%{b:X}')
     return "".join(out)
 
-HTML_REF_WORD = r'&[a-zA-Z0-9]+;'
-HTML_REF_DIGIT = r'&#X?[a-fA-F0-9]{1,7};'
-def resolve_HTML_char_refs(s:str)->str:
-    '''similar to parse_inline_char_ref(),
-    finds all HTML char references in '''
-    mm = re.findall(HTML_REF_WORD,s)
-    for m in mm:
-        if m in HTML_ENTITIES.keys():
-            s = s.replace(m,HTML_ENTITIES[m]['characters'])
-    mm = re.findall(HTML_REF_DIGIT,s)
-    for m in mm:
-        i = int(m[3:-1],16) if m[2] in ('X','x') else int(m[2:-1])
-        s = s.replace(m,chr(i))
+
+
+HTML_REF_WORD = r'[^\\](\\\\)*(&[a-zA-Z0-9]+;)' # will not match if first in string so make sure to pad
+HTML_REF_DIGIT = r'[^\\](\\\\)*(&#X?[a-fA-F0-9]{1,7};)'
+ASCII_PUNCTUATION_ESCAPE = r'\\[!"#$%&\'()*+,-./:;<=>?@\[\\\]\^_`{|}~]'
+HTML_Danger = {'"': "&quot;", '&': "&amp;", '<': "&lt;", '>': "&gt;", '\u0000' : '\uFFFD'}
+def sanitize_text(s:str, escape:bool=True, resolve_refs:bool=True, replace_dangerous:bool=True)->str:
+    '''General sanitization function that, depending on provided options:
+    - Replaces escaped characters with their literal counterpart
+    - resolves HTML character references
+    - replaces HTML breaking characters with their reference counterpart.
+    Specifically it does this so they play along, not stepping on each other's toes'''
+
+
+    if resolve_refs:
+        mm = re.findall(HTML_REF_WORD,' '+ s) # padding for leading reference
+        for m in mm:
+            if m[-1] in HTML_ENTITIES.keys():
+                tgt = "".join(m)
+                val = "".join(m[:-1]) + HTML_ENTITIES[m[-1]]['characters']
+                s = s.replace(tgt,val) # keep ignored backslashes
+        mm = re.findall(HTML_REF_DIGIT,s)
+        for m in mm:
+            i = int(m[3:-1],16) if m[2] in ('X','x') else int(m[2:-1])
+            s = s.replace(m,chr(i))
+    if escape:
+        mm = re.findall(ASCII_PUNCTUATION_ESCAPE, s)
+        while (m:= re.search(ASCII_PUNCTUATION_ESCAPE, s)):
+                s = s.replace(m[0],m[0][1])
+    if replace_dangerous: # might be a better way but this works
+        o = []
+        for c in s:
+            if c in HTML_Danger.keys(): o.append(HTML_Danger[c])
+            else: o.append(c)
+        s = "".join(o)
+
     return s
-
-
-
-HTML_replace = {'"': "&quot;", '&': "&amp;", '<': "&lt;", '>': "&gt;", '\u0000' : '\uFFFD'}
-def HTML_sanitize(string:str)->str:
-    '''returns a sanitized version of the string as to not use symbols
-    that might break HTML formatting'''
-    
-    
-    # oneliner for one-lengths
-    if len(string) == 1: return HTML_replace[string] if string in HTML_replace.keys() else string
-    
-    out = []
-    for c in string:
-        if c in HTML_replace.keys():
-            out.append(HTML_replace[c])
-        else: out.append(c)
-    return "".join(out)
 
 SCHEME_PATTERN = r'[a-zA-Z+.-]{2,32}'
 URI_NOMATCH = r'[\u0000-\u001F\u007f <>]'
@@ -250,8 +249,8 @@ def label_collapse(label:str)->str:
     return label
 
 if __name__ == "__main__":
-    teststr = '&nbsp; &amp; &copy; &AElig; &Dcaron; &#35; &#1234; &#992; &#0; &nbsp &x; &#; &#x;'
-    print(resolve_HTML_char_refs(teststr))
+    teststr = '&check; \\&Cross; \\\\&checkmark; \\\\\\&not; \\a\\&nrightarrow;'
+    print(sanitize_text(teststr))
 
     
         
