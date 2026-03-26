@@ -309,7 +309,7 @@ class Block():
         matching `-`, `_`, or `*` characters, followed by any number of spaces and tabs'''
 
         # check indent:
-        if Block.current_line[0:4].strip() == '': return False # too much indent
+        if Block.current_line[0:4].replace('\t','    ').strip() == '': return False # too much indent
 
 
         # now strip of whitespace and check for characters:
@@ -333,6 +333,9 @@ class Block():
         the heading level is equal to the number of `#` characters in the opening sequence.
         
         Returns number of heading or 0 for false'''
+
+        # check indent:
+        if Block.current_line[0:4].replace('\t','    ').strip() == '': return False # too much indent
 
         
         # count and strip initial `#`:
@@ -367,6 +370,9 @@ class Block():
         # first check if it's a paragraph before this
         if not isinstance(self, Paragraph):
             return ''
+        
+        # check indent:
+        if Block.current_line[0:4].replace('\t','    ').strip() == '': return '' # too much indent
         
         # now strip of whitespace and check for characters:
         l = Block.current_line.strip().replace(" ", "").replace("\t", "") # spaces and tabs allowed between
@@ -764,7 +770,7 @@ class Paragraph(Block):
         self.contents += content
 
     def realize(self) -> str: # strip 0 to 3 spaces before
-        return "<p>" + inline_parse(self.contents.lstrip(' '), link_references) + "</p>"
+        return "<p>" + inline_parse(self.contents, link_references) + "</p>"
 
 link_references= [] # references have: label, link, and title
 class Link_reference(Block):
