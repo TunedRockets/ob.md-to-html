@@ -49,7 +49,7 @@ class Block():
             self.parent:"Block" = parent
 
             self.parent.children.append(self) # add child to parent
-            self.parent.open_child = self # set onself as the open child
+            self.parent.open_child = self # set oneself as the open child
         else:
             # for the root:
             self.is_containter = True
@@ -100,13 +100,12 @@ class Block():
             # else: b is open or lazy, check for interrupts
             for t in Block.__subclasses__():
                 if t.can_interrupt(b, o_list[-1]):
-                    # add new block to the stack:
-                    b:Block = b.open_child # type:ignore
-                    o_list.append(b.can_continue()) 
+                    # "add" new block to the stack:
+                    o_list.append(b.open_child.can_continue()) #type:ignore
+                    #TODO: this initial can continue is messing stuff up. find another solution!
                     break # this falls past the else into a continue
             else:
                 # did not find any interrupt, add content to open
-                pass
                 break
             continue
         # end while:
@@ -130,7 +129,7 @@ class Block():
         it will still consume indents for lazyness, if parent is lazy then child is lazy as well
         if false, will not consume anything and return 0'''
         
-        return True # root can always continue
+        return 2 # root can always continue
 
     def add_content(self,content:str):
         '''adds content to block. if block that is a leaf, i.e. paragraph, code block etc. then add to content.
@@ -169,7 +168,10 @@ class ATX_heading(Block):
         self.level = level
 
     def can_continue(self) -> int:
-        return 0 # ATX headings are one line only
+        if self.open:
+            self.open = False
+            return 2
+        else: return 0 # ATX headings are one line only
     
     @staticmethod
     def can_interrupt(b:"Block", laziness:int)->bool:
@@ -260,7 +262,10 @@ class Setext_heading(Block):
         return True
 
     def can_continue(self) -> int:
-        return 0 # Setext are closed once created
+        if self.open:
+            self.open = False
+            return 2
+        else: return 0 # Setext headings are one line only
     
     def realize(self) -> str:
         return f"<h{self.level}>" + inline_parse(self.contents, link_references) + f"</h{self.level}>"
@@ -271,7 +276,10 @@ class Thematic_break(Block):
         super().__init__(parent)
 
     def can_continue(self) -> int:
-        return 0 # thematic breaks are one line only
+        if self.open:
+            self.open = False
+            return 2
+        else: return 0 # thematic breaks are one line only
     
     @staticmethod
     def can_interrupt(b:"Block", laziness:int)->bool:
@@ -279,7 +287,7 @@ class Thematic_break(Block):
         thematic breaks are up to three spaces of indentation, followed by 3 or more 
         matching `-`, `_`, or `*` characters, followed by any number of spaces and tabs'''
 
-        if not type(b) in (Paragraph, Block_quote, List_item):
+        if not type(b) in (Block, Paragraph, Block_quote, List_item):
             return False
 
         # check indent:
@@ -351,7 +359,7 @@ class List_Block(Block):
         critically they don't remove the marker, that's for the item to do'''
         #TODO: same logic as list item
 
-        if not type(b) in (Paragraph, Block_quote, List_item):
+        if not type(b) in (Block, Paragraph, Block_quote, List_item):
             return False
 
         # if list item could interrupt then i can as well:
@@ -467,7 +475,7 @@ class Block_quote(Block):
          or single carat '>' followed by no space or tab
          if followed by a tab, that tab represents 3 spaces'''
         
-        if not type(b) in (Paragraph, List_item, Block_quote):
+        if not type(b) in (Block, Paragraph, List_item, Block_quote):
             return False
         # check indent:
         if Block.current_line[0:4].replace('\t','    ').strip() == '': return False # too much indent
@@ -519,7 +527,7 @@ class Fenced_code_block(Block):
         returns the type of delimiter if true else false'''
         
         # can only interrupt a few things:
-        if not type(b) in (Paragraph, List_item, Block_quote):
+        if not type(b) in (Block, Paragraph, List_item, Block_quote):
             return False
         # check indent:
         if Block.current_line[0:4].replace('\t','    ').strip() == '': return False # too much indent
@@ -586,7 +594,7 @@ class Indented_code_block(Block):
         Indented code blocks cannot interrupt paragraphs'''
         
         # can only interrupt a few things (notably not paragraph):
-        if not type(b) in (List_item, Block_quote) and not peek:
+        if not type(b) in (Block, List_item, Block_quote) and not peek:
             return False
         
         # otherwise it's just a question of if there's 4 or more indents
@@ -640,7 +648,7 @@ class HTML_block(Block):
         seven conditions start and end a HTML block. this returns the number of the condition fulfilled, or 0 if not.
         contained text should be kept as is. line can also end same place it begins
         Also note! type 7 can't interrupt a paragraph'''
-        if not type(b) in (Paragraph, List_item, Block_quote):
+        if not type(b) in (Block, Paragraph, List_item, Block_quote):
             return False
         # check indent:
         if Block.current_line[0:4].replace('\t','    ').strip() == '': return False # too much indent
@@ -767,7 +775,7 @@ class Link_reference(Block):
         plan is to treat a potential link reference as link reference, then regress to paragraph is not
         (link reference also cannot interrupt a paragraph)'''
 
-        if not type(b) in (Paragraph, List_item, Block_quote):
+        if not type(b) in (Block, Paragraph, List_item, Block_quote):
             return False
         # check indent:
         if Block.current_line[0:4].replace('\t','    ').strip() == '': return False # too much indent
