@@ -255,6 +255,14 @@ def label_collapse(label:str)->str:
     label = " ".join(label.split())
     return label
 
+def lstrip2(s:str, c:str,i:int)->str:
+    '''lstrip but with a limit on how many'''
+    for _ in range(i):
+        if s[0] == c: s = s[1:]
+        else: break
+    return s
+
+
 if __name__ == "__main__":
     teststr = '&#xcab;'
     print(sanitize_text(teststr))
