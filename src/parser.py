@@ -224,7 +224,7 @@ class ATX_heading(Block):
 
 class Setext_heading(Block):
 
-    def __init__(self, parent: Block, c:str,dont_eat:bool = False) -> None:
+    def __init__(self, parent: Block, c:str) -> None:
 
         # check level:
         self.level = 1 if c == '=' else 2
@@ -236,13 +236,12 @@ class Setext_heading(Block):
         else: p = parent.open_child # type:ignore
         con = p.contents # type: ignore
         # delete paragraph:
-        if not dont_eat:
-            parent.children.remove(p) # type:ignore
-            del(p)
+        parent.children.remove(p) # type:ignore
+        del(p)
         super().__init__(parent, con)
 
     @staticmethod
-    def can_interrupt(b:"Block", dont_eat:bool = False)->"Setext_heading|None":
+    def can_interrupt(b:"Block")->"Setext_heading|None":
         '''headings can only interrupt "standard" blocks
         
         Setext heading indicators are up to three spaces of indentation, followed by 1 or more 
@@ -251,6 +250,8 @@ class Setext_heading(Block):
         '''
         # setext only interrupts paragraphs
         if not isinstance(b, Paragraph): return None
+
+        # TODO: and NOT in lazy continuations (how check?)
         
 
 
@@ -267,7 +268,7 @@ class Setext_heading(Block):
                 return None # other kind of character
         # else:
         # Block.current_line = '' don't eat now, eat later
-        new = Setext_heading(b,c,dont_eat)
+        new = Setext_heading(b,c)
         return new
 
     def can_continue(self) -> bool:
@@ -568,7 +569,7 @@ class Block_quote(Block):
             # lazy check, if anything except paragraph can start, we need to end
             for t in Block.__subclasses__():
                 # long line for edge case:
-                if new := t.can_interrupt(self) or (t == Setext_heading and isinstance(self.open_child, Paragraph) and (new := t.can_interrupt(self.open_child, dont_eat=True))):
+                if new := t.can_interrupt(self):
                     new.parent.children.remove(new) # clean up
                     del(new)
                     self.open = False
