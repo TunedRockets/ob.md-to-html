@@ -262,6 +262,16 @@ def lstrip2(s:str, c:str,i:int)->str:
         else: break
     return s
 
+def tab_shuffle(s:str)->str:
+    '''Shuffles leading tabs so that spaces go to the inside.
+    needed because of the strange pseudotab behaviour'''
+    if (ind := re.match(r'[ \t]+',s)) is None: return s # no need to do anything
+    # fix ind:
+    ind = ind[0]
+    while '  \t' in ind:
+        ind = ind.replace('  \t', '\t  ') # shuffle tabs
+    return ind + s[len(ind):]
+
 
 if __name__ == "__main__":
     teststr = '&#xcab;'

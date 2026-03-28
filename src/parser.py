@@ -1,36 +1,4 @@
 
-'''
-Strategy:
-in accordance with https://spec.commonmark.org/0.31.2/#appendix-a-parsing-strategy,
-the parsing will work as follows:
-1. first lines of input are consumed to construct the block structure
-    parsing links but not any text
-2. second the raw text is parsed into sequences.
-
-
-
-
-
-Additional steps:
-Aside from the patterms in commonmark, obsidian also uses:
-- Tables
-- task list items
-- strikethrough
-- autolinks
-- disallowed raw HTML
-from the GFM spec (https://github.github.com/gfm/), and the addition of:
-- internal links
-- embeded files
-- block references (and defining a block)
-- footnotes
-- comments
-- highlights
-- callouts
-that are additional extensions for obsidian (https://obsidian.md/help/obsidian-flavored-markdown)
-
-there is also the LaTeX/KaTeX/MathJax blocks, which deserve attention
-'''
-
 from io import StringIO
 import re
 import unicodedata as uni
@@ -38,6 +6,7 @@ import unicodedata as uni
 # grab HTML entities:
 from pathlib import Path
 import json
+from typing import overload
 
 
 import sys
@@ -46,14 +15,27 @@ sys.path.append(directory)
 from utils import *
 from inline import *
 
+def parse_md(text:StringIO)->str:
+    '''
+    Takes a string-input (like a file) comprising a .md document,
+    and returns a string containing the equivalent
+    HTML.  (perhaps make it a string output as well?)
+    
+    '''
+    Block.init(text)
+    while Block.read_line(): pass # read all lines
+
+    return Block.root.realize()
+
+
+
+
 class Block():
 
     input:StringIO
     root:"Block"
     current_line:str
-    reread_line:bool
-    is_containter:bool = False # for block-quotes and lists
-    parse_verbatim:bool = False # for code and HTML blocks
+    current_open:"Block"
 
     def __init__(self,parent:"Block|None", contents:str = "") -> None:
         self.contents:str = contents
@@ -62,13 +44,13 @@ class Block():
         
         if not parent is None:
 
-            # make sure parant can hold stuff (otherwise ask their parent)
-            while not parent.is_containter: parent = parent.parent
+            # don't want to be child to paragraph (only time that would matter)
+            if isinstance(parent, Paragraph): parent = parent.parent
 
             self.parent:"Block" = parent
 
             self.parent.children.append(self) # add child to parent
-            self.parent.open_child = self # set onself as the open child
+            self.parent.open_child = self # set oneself as the open child
         else:
             # for the root:
             self.is_containter = True
@@ -87,62 +69,72 @@ class Block():
         '''
         reads a new line from the input and updates the block tree.
         Procedure:
-        1. Iterate through tree to find last (last child) open block
-            check if line satisfies the block, if it does, add it, if not, 
-            can't close just yet because of lazy continuation
-        2. next, look for new block starts (e.g. '>'), if a new block starts,
-            close all unmatched blocks from 1
-        3. finally, what remains can be added to the content of the last open block
+        1. check if current open can stay open,
+        if it cant, close it and move open up a level, if it can (lazily), pass that on.
+        if any block is lazy, it's children must be lazy as well
+        2. if it can, next check if new line can cause an interruption
+        2a. if no add to open and move on
+        2b. if yes, check if it interrupts inside or outside, then set that as open and check
+        the line again.
+
+        returns true on successful read, and false if EOF is reached.
         '''
 
-        if not Block.reread_line: # to deal with blocks that don't use the line
-            Block.current_line = Block.input.readline()
-        else: Block.reread_line = False # reset
+        # get new line:
+        Block.current_line = Block.input.readline()
 
-        if Block.current_line == "": return False # EOF condition
+        if Block.current_line == '': return False # EOF
 
-
-        # get all open blocks, in descending order (can be improved)
+        # get deepest open: (0:closed, 1:lazy, 2:open)
         b = Block.root
-        considered_blocks:list["Block"] = [b]
-        while not (b := b.open_child) is None:
-            considered_blocks.append(b)
+        o_list = []
+        while not (b.open_child) is None:
+            o_list.append(b.can_continue())
+            b = b.open_child
+        o_list.append(b.can_continue())
+        while True:
+            # b is lowest, if they can continue we close them and go up the tree
+            if o_list[-1] == 0:
+                # b can't continue
+                o_list.pop()
+                b = b.parent # type:ignore (we know it has a parent)
+                continue # return to start
+            # else: b is open or lazy, check for interrupts
+            for t in Block.__subclasses__():
+                if t.can_interrupt(b, o_list[-1]):
+                    # "add" new block to the stack:
+                    # first make sure it wasn't added outside:
+                    if b.open_child is None: b = b.parent
 
-        # check if block is matched (start looking from top down):
-        block_matched = []
-        for block in considered_blocks:
-            block_matched.append(block.can_continue()) # removes continuation markers
-
-        # at this point we can pretend to be at base level        
-
-        # create new block if applicable ( and redo that if it was a containter):
-        while (not (new_block := considered_blocks[-1].check_for_new_block()) is None):
-            if not new_block.is_containter: break # leaf, end loop
-            # else: add to list and go again
-            considered_blocks.append(new_block)
+                    o_list.append(b.open_child.can_continue()) #type:ignore
+                    b = b.open_child # make new block the open one
+                    break # this falls past the else into a continue
+            else:
+                # did not find any interrupt, add content to open
+                break
+            continue
+        # end while:
+        # add content to open:
+        b.add_content(Block.current_line)
+        return True # start on next line
         
-        # some block eat the line without needing it added:
-        if type(new_block) in (Thematic_break, Setext_heading):
-            return True
+
+
         
-        if not new_block is None:
-
-            # close all not-prospective blocks:
-            for i in range(len(block_matched)):
-                if not block_matched[i]:
-                    considered_blocks[i].open = False
-
-            # add this block to consideration:
-            considered_blocks.append(new_block)
-
-        # now, find lowest open block and add contents to it:
-
-        for b in considered_blocks[::-1]:
-            if b.open:
-                b.add_content(Block.current_line)
-                return True
-
-        return True # this should never be reached
+    @staticmethod
+    def can_interrupt(b:"Block", laziness:int)->bool:
+        '''Checks whether the class can interrupt the current block
+        if it can, do so and return true,
+        else return false'''
+        raise NotImplementedError("root can't interrupt")
+    
+    def can_continue(self)->int:
+        '''Checks if block can continue on next line, and consumes any indicative markers
+        lazy lists and quote blocks will return the conditional 1, indicating lazyness.
+        it will still consume indents for lazyness, if parent is lazy then child is lazy as well
+        if false, will not consume anything and return 0'''
+        
+        return 2 # root can always continue
 
     def add_content(self,content:str):
         '''adds content to block. if block that is a leaf, i.e. paragraph, code block etc. then add to content.
@@ -159,154 +151,160 @@ class Block():
 
         res = ""
         for child in self.children:
-            res += child.realize() + "\n"
+            res += child.realize()
+            res += '\n' if res[-1] != '\n' else '' # make sure each is separated by newline
         # strip extra newlines:
         if (len(res) > 0) and (res[-1] == '\n'): return res.rstrip('\n') + '\n'
         else: return res
         
-    def can_continue(self)->bool:
-        '''checks if block can continue on next line, if it can it consumes the continuing marker.
-        if it doesn't allow lazy lines, it also closes itself if it can't continue'''
-        return True # root can always continue
-
-    def check_for_new_block(self)->"Block|None":
-        '''
-        checks if a new leaf or container block can be started, if yes return that block, if no return none,
-        (for lists, it creates list and list item and returns the list item)
-        '''
-
-        # filter out newlines:
-        if Block.current_line.strip() == "": return
-
-        if self.parse_verbatim: return # don't make any new blocks, rest is verbatim
-
-        if self.is_indented_code_block(): # since indents take presidence
-            return Indented_code_block(self)
-
-        # block quote block:
-        if self.is_block_quote_block():
-            return Block_quote(self)
-        
-        if c := self.is_Setext_heading(): # takes precedence over thematic break
-            # Setext should replace previous paragraph, so call on paragraph parent
-            return Setext_heading(self.parent,c)
-
-        if self.is_thematic_break(): # takes precedence over lists
-            return Thematic_break(self)
-
-        # list block:        
-        if m := self.is_list_item():
-            # now figure out if new block or not
-
-            # if just new item, then self.parent.parent is the list block (p->li->ul)
-            # or if we just had a heading or something, then self.parent (li->ul)
-            if isinstance(self,Paragraph) and isinstance(self.parent, List_item):
-                l:List_Block = self.parent.parent # type:ignore
-                if l.marker_belongs(m):
-                    return List_item(l, m) 
-            elif isinstance(self, List_item):
-                l:List_Block = self.parent # type:ignore
-                if l.marker_belongs(m):
-                    return List_item(l, m) 
-            # else:
-            # new list, "add" list_block (constructor takes care of proper ordering)
-            b = List_Block(self,m)
-            return List_item(b,m)
     
-        if i := self.is_ATX_heading():
-            return ATX_heading(self, i)
+
+  
+
+    def __repr__(self) -> str:
+        return self.__class__.__name__ + ": " + self.contents
+
+# order of subclasses indicates precedence:
+
+
+class ATX_heading(Block):
+
+    def __init__(self, parent: Block, level:int) -> None:
+        super().__init__(parent)
+        self.level = level
+
+    def can_continue(self) -> int:
+        if self.open:
+            self.open = False
+            return 2
+        else: return 0 # ATX headings are one line only
+    
+    @staticmethod
+    def can_interrupt(b:"Block", laziness:int)->bool:
+        '''headings can only interrupt "standard" blocks
         
-        if (c := self.is_fenced_code_block()):
-            return Fenced_code_block(self, c) # type:ignore
-        
-        if (i := self.is_HTML_block()):
-            return HTML_block(self, i)
+        ATX headings are 0-3 indents, followed by 1-6 `#` characters, followed by non-zero whitespace, then an optional title,
+        and an optional closing sequence of any number of `#` characters,
+        the heading level is equal to the number of `#` characters in the opening sequence.
+        '''
 
-        if self.is_link_reference_definition():
-            return Link_reference(self)
-        
-        # if self.is_table_block():
-        #     pass # TODO
+        if not type(b) in (Block, Paragraph, Block_quote, List_item):
+            return False
 
-        # else it's a paragraph or not a new block
-
-    def is_block_quote_block(self)->bool:
-        '''is the next line a new block quote.
-        Block quotes defined by 0-3 indents followed by a carat: '>' and a space or tab,
-         or single carat '>' followed by no space or tab
-         if followed by a tab, that tab represents 3 spaces'''
-
-
+        # check indent:
+        if Block.current_line[0:4].replace('\t','    ').strip() == '': return False # too much indent
 
         
-        # remove whitespace (if it's more indents would have taken it)
-
-        l = Block.current_line.lstrip(' ')
-        if l[0] != '>': return False
+        # count and strip initial `#`:
+        l = Block.current_line.strip()
+        llen = len(l)
+        idx = 0
+        while (idx < llen):
+            if l[idx] != '#': break
+            else: idx += 1
+        if idx > 6: return False # too many
+        if idx == 0: return False # too few
+        if len(l) > idx and (not l[idx] in (' ', '\t')): return False # no space after `#` sequence
         
-        # check for space:
-        if l[1] == ' ':
-            Block.current_line = l[2:] # remove one space
-            return True
-        if l[1] == '\t': # tab replaced by ">   " of which "> " removed (from the leftmost tab)
-            l = l[-1:0:-1]
-            l = l.replace('\t', '  ',1) # reverse l, replace, re-reverse
-            l = l[::-1]
-            Block.current_line = l
-            return True
-        Block.current_line = l[1:]
-        return True # nospace after caret
+        # strip `#` from content
+        l = l.lstrip('#')
+        
 
-    def is_list_item(self)->str:
-        '''is the next line a list item
-        list items are indicated by a bullet list marker `-`, `+`, or `*`,
-        or by an ordered list marker, which is a sequence of 1-9 digits followed by `.` or `)`
-        returns marker including digits if true, empty string if false,
-        the return includes extra indentation for catching subserquent blocks'''
+        # valid heading, strip trailing `#` and whitespace
+        ls = l.rstrip('#')
+        if ls == '' or (ls[-1] in (' ', '\t')):
+            # valid trailing, cut it off:
+            l = ls
+        Block.current_line = '' # eat line
+        new = ATX_heading(b,idx)
+        new.add_content(l) # add the content
+        return True
 
-        # it allows for 0-3 whitespace before, so:
-        l = Block.current_line.lstrip(' ')
-        tabbed = (l[1] == "\t") # tabs assume a spacing of 1
-        l = l.replace('\t', '   ',1) # expand tabs (including the '- ' for the first one)
-        # l = l.replace('\t', '    ')
+    def add_content(self, content: str):
+        self.contents += content
+
+    def realize(self) -> str:
+        return f"<h{self.level}>" + inline_parse(self.contents, link_references) + f"</h{self.level}>"
+
+class Setext_heading(Block):
+
+    def __init__(self, parent: Block, c:str) -> None:
+
+        # check level:
+        self.level = 1 if c == '=' else 2
+
+        # grab paragraph
+        if isinstance(parent, Paragraph):
+            p = parent
+            parent = p.parent
+        else: p = parent.open_child # type:ignore
+        con = p.contents # type: ignore
+        # delete paragraph:
+        parent.children.remove(p) # type:ignore
+        del(p)
+        super().__init__(parent, con)
+
+    @staticmethod
+    def can_interrupt(b:"Block", laziness:int)->bool:
+        '''headings can only interrupt "standard" blocks
+        
+        Setext heading indicators are up to three spaces of indentation, followed by 1 or more 
+        matching `-` or `=` characters, followed by any number of spaces and tabs
+        returns character if true and empty string
+        '''
+        # setext only interrupts paragraphs (and not lazy ones)
+        if not isinstance(b, Paragraph) or laziness == 1:
+            return False
 
 
-        if (c := l[0]) in ('-','+','*'):
-            # figure out how much extra indentation:
-            n_spaces = len(l[1:]) - len(l[1:].lstrip(' '))
-            if n_spaces == 0: return '' # not enough spaces
-            n_spaces %= 4 # to remove potential codespaces
-            # otherwise pass that on as part of marker:
+        # check indent:
+        if Block.current_line[0:4].replace('\t','    ').strip() == '': return False # too much indent
 
-            # remove marker
-            if tabbed: n_spaces = 1
+        
+        # now strip of whitespace and check for characters:
+        l = Block.current_line.strip() # spaces not allowed inside
+        if not ((c := l[0]) in ('-', '=')):
+            return False # not right character
+        for c2 in l:
+            if c2 != c:
+                return False # other kind of character
+        # else:
+        # delete line:
+        Block.current_line = ''
+        new = Setext_heading(b,c)
+        return True
 
-            Block.current_line = l[1 + n_spaces:]
-            return c + ' ' * n_spaces
+    def can_continue(self) -> int:
+        if self.open:
+            self.open = False
+            return 2
+        else: return 0 # Setext headings are one line only
 
-            
-        # ordered:
-        for d in ('.', ')'):
-            n, c, _ = l.partition(d)
-            if n.isnumeric() and len(n) < 10:
-                # valid number, and a dot, check for spacing:
-                i = l[len(n)+1:len(n)+6]
-                n_spaces = len(i) - len(i.lstrip(' '))
-                if n_spaces == 0: return ''
-                if n_spaces == 5:
-                    # that's code block, not extra indentation
-                    Block.current_line = l[len(n) + 2:]
-                    return n + c
-                # otherwise pass that on as part of marker:
-                if tabbed: n_spaces = 1
-                Block.current_line = l[len(n) + 1 + n_spaces:]
-                return n + c + ' ' * n_spaces
-        return ''
+    def add_content(self, content: str):
+        pass # already grabbed the content
+    
+    def realize(self) -> str:
+        return f"<h{self.level}>" + inline_parse(self.contents, link_references) + f"</h{self.level}>"
 
-    def is_thematic_break(self)->bool:
-        '''is the next line a thematic break,
+class Thematic_break(Block):
+
+    def __init__(self, parent: Block) -> None:
+        super().__init__(parent)
+
+    def can_continue(self) -> int:
+        if self.open:
+            self.open = False
+            return 2
+        else: return 0 # thematic breaks are one line only
+    
+    @staticmethod
+    def can_interrupt(b:"Block", laziness:int)->bool:
+        '''Thematic breaks interrupt only paragraphs or quotes/list-items
         thematic breaks are up to three spaces of indentation, followed by 3 or more 
         matching `-`, `_`, or `*` characters, followed by any number of spaces and tabs'''
+
+        if not type(b) in (Block, Paragraph, Block_quote, List_item):
+            return False
 
         # check indent:
         if Block.current_line[0:4].replace('\t','    ').strip() == '': return False # too much indent
@@ -320,210 +318,21 @@ class Block():
         for c2 in l:
             if c2 != c:
                 return False # other kind of character
-        else:
+        # else:
             # ensure enough characters:
-            if l.count(c) >= 3:
-                return True # matches
-            else: return False
+        if l.count(c) < 3: return False # too few
 
-    def is_ATX_heading(self)->int:
-        '''is the next line an ATX heading,
-        ATX headings are 0-3 indents, followed by 1-6 `#` characters, followed by non-zero whitespace, then an optional title,
-        and an optional closing sequence of any number of `#` characters,
-        the heading level is equal to the number of `#` characters in the opening sequence.
-        
-        Returns number of heading or 0 for false'''
-
-        # check indent:
-        if Block.current_line[0:4].replace('\t','    ').strip() == '': return False # too much indent
-
-        
-        # count and strip initial `#`:
-        l = Block.current_line.strip()
-        llen = len(l)
-        idx = 0
-        while (idx < llen):
-            if l[idx] != '#': break
-            else: idx += 1
-        if idx > 6: return 0 # too many
-        if idx == 0: return 0 # too few
-        if idx == llen: 
-            Block.current_line = ''
-            return idx # no title heading
-        if not l[idx] in (' ', '\t'): return 0 # no space after `#` sequence
-
-        # valid heading, strip trailing `#` and whitespace
-        ls = l.rstrip('#')
-        if not ls[-1] in (' ', '\t'):
-            # not valid trailing, pass on as content:
-            Block.current_line = l[idx:].strip()
-        else:
-            Block.current_line = ls[idx:].strip() # remove trailing `#` as well
-        return idx # number of heading
-
-    def is_Setext_heading(self)->str:
-        '''is the next line an Setext heading,
-        Setext heading indicators are up to three spaces of indentation, followed by 1 or more 
-        matching `-` or `=` characters, followed by any number of spaces and tabs
-        returns character if true and empty string if false'''
-
-        # first check if it's a paragraph before this
-        if not isinstance(self, Paragraph):
-            return ''
-        
-        # check indent:
-        if Block.current_line[0:4].replace('\t','    ').strip() == '': return '' # too much indent
-        
-        # now strip of whitespace and check for characters:
-        l = Block.current_line.strip().replace(" ", "").replace("\t", "") # spaces and tabs allowed between
-        if not ((c := l[0]) in ('-', '=')):
-            return '' # not right character
-        for c2 in l:
-            if c2 != c:
-                return '' # other kind of character
-        else:
-            return c # matches
-
-    def is_indented_code_block(self)->bool:
-        '''is the next line an indented code block,
-        indented code blocks are lines beginning with 4 indentations, followed by arbitrary text.
-        Indented code blocks cannot interrupt paragraphs'''
-
-        if isinstance(self, Paragraph) and self.open: return False
-
-        # if tab is involved, spaces before tabs are not carried through
-        st = Block.current_line[0:4] # relevant part
-        if st == '    ': # easiest option
-            Block.current_line = Block.current_line[4:] # trim spaces
-            return True
-        elif '\t' in st:
-            # keep spaces after tab
-            sp = st.split('\t')
-            if sp[0].lstrip(' ') != '': return False # has something other than tabs
-
-            st = "".join(sp[1:]) # after first tab
-            Block.current_line = st + Block.current_line[4:]
-            return True
-        else: return False
-    
-    def is_fenced_code_block(self)->str|bool:
-        '''is the next line a fenced code block,
-        fenced code blocks start with 0-3 indents followed by three of either `` ` `` or `~`,
-        following the start, the next whitespace separated string is the info-string (rest of line discarded),
-        after this the code block is ended by the same symbol, it may be ended on the same line (in which case there's no info string),
-        if inline, the check fails and is treated in the inline part of parsing
-        returns the type of delimiter if true else false
-        '''
-        # get rid of leading whitespace:
-        l = Block.current_line.lstrip(' ')
-
-        if not ((c := l[0]) in ('`', '~')):
-            return False # wrong character
-        if not (l[0:3] == c+c+c):
-            return False # doesn't match pattern
-
-        if '`' in l[3:]: return False # not allowed in info string (for inline see inline parser)
-        if c == '~' and '~' in l[3:]: return False # --||--
-
-        # it's true so remove the actual fence
-        Block.current_line = l[3:]
-
-        return c
-    
-    def is_HTML_block(self)->int:
-        '''is the next line a HTML block.
-        seven conditions start and end a HTML block. this returns the number of the condition fulfilled, or 0 if not.
-        contained text should be kept as is. line can also end same place it begins
-        Also note! type 7 can't interrupt a paragraph'''
-        l = Block.current_line.rstrip()
-        
-        one_tags = ["<pre", "<script", "<style", "<textarea"]
-        six_tags = ["address", "article", "aside", "base", "basefont", "blockquote", "body", "caption", "center", "col",
-                    "colgroup", "dd", "details", "dialog", "dir", "div", "dl", "dt", "fieldset", "figcaption", "figure",
-                    "footer", "form", "frame", "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head", "header", "hr",
-                    "html", "iframe", "legend", "li", "link", "main", "menu", "menuitem", "nav", "noframes", "ol",
-                    "optgroup", "option", "p", "param", "search", "section", "summary", "table", "tbody", "td", "tfoot",
-                    "th", "thead", "title", "tr", "track", "ul"]
-        six_tags.extend(['/' + s for s in six_tags]) # closing tags allowed as well
-        six_tags.extend([s + '/' for s in six_tags]) # and extra closing /
-        
-        # one: start of area
-        # DOESN"T  WORK BECAUSE \n IS ALWAYS LAST, HAVE TO CHECK BEFORE THAT IS SPACE!!! TODO
-        if l[-1] in (' ', '\t', '>', '\n') and l[:-1].lower() in one_tags:
-            return 1
-
-        # two: HTML comment
-        if l[0:4] == "<!--":
-            return 2
-
-        # three: PHP tag:
-        if l[0:2] == "<?":
-            return 3
-
-        # four: other comment?
-        if l[0:2] == "<!":
-            return 4
-
-        # five: CDATA:
-        if l[0:9] == "<![CDATA[":
-            return 5
-        
-        # six: known tag (only needs to start with known tag)
-        if l[0] == "<":
-            if l.partition('>')[0][1:] in six_tags:
-                return 6
-        
-        
-            # seven: unknown tag
-            # 7 can't interrupt paragraph, so:
-            if isinstance(self, Paragraph): return 0
-
-            if is_HTML_tag(l.rstrip()): # needs to be standalone tag
-                return 7
-        
-        return 0 
-
-    def is_link_reference_definition(self)->bool:
-        '''is the next line a link reference definition.
-        link references are comprised of a link label preceeded by 0-3 indentation
-        then a colon `:`, then (with optional whitespace including up to one line break)
-        a link destination, then (at least one whitespace)
-        an optional link title. and no further elements.
-        
-        plan is to treat a potential link reference as link reference, then regress to paragraph is not
-        (link reference also cannot interrupt a paragraph)'''
-
-        # first check for label:
-        l = Block.current_line.rstrip(' ')
-        if l[0] != '[': return False
-        label,_,rest = l[1:].partition(']') # rest may be empty if title continues
-        if not valid_label_name(label): return False
-        
-        # now we don't know if the entire link is valid, but it's not invalid
-        # treat it as valid and if not collapse it into a paragraph
+        Block.current_line = ''
+        new = Thematic_break(b)
         return True
-    
-    def is_table_block(self)->bool:
-        '''is the next line a table block'''
-        raise NotImplementedError()
 
-    def __repr__(self) -> str:
-        return self.__class__.__name__ + ": " + self.contents
-
-class Block_quote(Block):
-
-    is_containter:bool = True
-    
-    def can_continue(self) -> bool:
-        '''same as a new block quote'''
-        return self.is_block_quote_block()
+            
+    def add_content(self, content: str):
+        pass # can't add content to themaic break
     
     def realize(self) -> str:
-        res = "<blockquote>\n"
-        for child in self.children:
-            res += child.realize() + '\n'
-        return res + "</blockquote>"
-    
+        return "<hr />"
+
 class List_Block(Block):
 
     def __init__(self, parent: Block | None, marker:str) -> None:
@@ -534,6 +343,9 @@ class List_Block(Block):
         
         super().__init__(parent)
         self.marker = marker
+        self.loose = False
+        '''A list is loose if any of it's constituents are separated by blank lines, or if any item directly contains
+        two block-level elements with a blank line between them'''
     
     def marker_belongs(self, m:str)-> bool:
         '''check if a marker belongs to this list'''
@@ -549,11 +361,36 @@ class List_Block(Block):
         my_m = n[-1] + s + my_m
         return my_m == m
     
-    def can_continue(self) -> bool:
+    def can_continue(self) -> int:
         '''If next line can continue as list item, or is new list item, then we can continue.
-        hot to check this without spoiling the line?'''
-        #TODO:
-        return True
+        HOW DO?'''
+        # if a new item can be made (of same marker), or an item can continue, then it's fine,
+        # and blank lines can also continue
+        if m:= List_item.can_interrupt(self, 2,peek=True):
+            if self.marker_belongs(m): return 2
+        if self.open_child.can_continue(peek=True): # type:ignore
+            return 2
+        elif Block.current_line.strip()=='': 
+            self.loose = True
+            return 2
+        else: return 0
+    
+    @staticmethod
+    def can_interrupt(b:Block, laziness:int)->bool:
+        '''Lists can only interrupt paragraph or containter
+        Lists can only start if there's a new list item.
+        critically they don't remove the marker, that's for the item to do'''
+        #TODO: same logic as list item
+
+        if not type(b) in (Block, Paragraph, Block_quote, List_item):
+            return False
+
+        # if list item could interrupt then i can as well:
+        if m := List_item.can_interrupt(b, laziness,peek=True):
+            new = List_Block(b,m)
+            return True
+        else: return False
+        
 
     def realize(self) -> str:
         res = "<ul>\n" if (self.marker[0] in ('-','+','*')) else "<ol>\n"
@@ -568,125 +405,227 @@ class List_item(Block):
     def __init__(self, parent: List_Block | None, marker:str) -> None:
         super().__init__(parent)
         self.marker = marker
+        self.startline = True
 
 
-    def can_continue(self) -> bool:
+    def can_continue(self, peek:bool=False) -> int:
         '''to continue the list needs the right number of indents,
         number of indents is equal to the same column (after all other markers are removed)'''
+        if self.startline: # to ensure it can continue on the first line
+            self.startline = False
+            return 2
+        if Block.current_line.strip()=='': 
+            self.parent.loose = True #type:ignore
+            return 2 # empty lines can continue
 
-
+        #TODO: does this worlk
         # expand tabs and get number of spaces:
         l =Block.current_line.replace('\t', '    ')
         n_space = len(l) - len(l.lstrip(' '))
         req_space = len(self.marker)
         if n_space > req_space:
             # clean up marker:
-            Block.current_line = l[req_space:]
-            return True
-        return False 
+            if not peek: Block.current_line = l[req_space:]
+            return 2
+        return 0 
     
-    def realize(self) -> str:
+    
+    @staticmethod
+    @overload
+    def can_interrupt(b,laziness,peek=True)->str: ...
+    @staticmethod
+    @overload
+    def can_interrupt(b,laziness,peek=False)->bool: ...
+
+    @staticmethod
+    def can_interrupt(b: Block, laziness: int, peek:bool=False) -> bool|str:
+        '''list items can only occur in lists, but a list item existing does
+        indicate that a new list can begin
+        
+        list items are indicated by a bullet list marker `-`, `+`, or `*`,
+        or by an ordered list marker, which is a sequence of 1-9 digits followed by `.` or `)`
+        
+        peek means the marker is not removed from the line, and it doesn't care what b is.
+        and it returns the marker (reuse for list block)
+        '''
+        if not type(b) == List_Block and not peek:
+            return False
+
+        # check indent:
+        if Block.current_line[0:4].replace('\t','    ').strip() == '': return False # too much indent
+
+        l = Block.current_line.lstrip().replace('\t', '   ',1) # in case there is a tab
+
+        # figure out the marker: (marker is followed by 1-4 spaces, if more then
+        # count as no spaces and the rest is a code-block)
+        if (c := l[0]) in ('-','+','*'):
+
+            n_spaces = len(l[1:].replace('\t','    ')) - len(l[1:].replace('\t','    ').lstrip(' '))
+            if n_spaces == 0: return False # not enough spaces
+            elif n_spaces > 4: n_spaces = 1 # rest is code block
+
+            mkr = c + ' ' * n_spaces
+            
+            if not peek: 
+                Block.current_line = tab_shuffle(l[len(mkr):]) # eat line (and shuffle tabs)
+                new = List_item(b,mkr) #type:ignore
+                return True
+            else: return mkr
+            
+
+        # match ordered list:
+        ORD_MATCH = r'[0-9]{1,9}[\.\)]'
+        if m:= re.match(ORD_MATCH, l):
+            i = int(m[0][:-1])
+            n_spaces = len(l[len(m[0]):]) - len(l[len(m[0]):].lstrip(' '))
+            if n_spaces == 0: return False # not enough spaces
+            elif n_spaces > 4: n_spaces = 1 # rest is code block
+
+            mkr = m[0] + ' ' * n_spaces
+            
+            if not peek: 
+                Block.current_line = tab_shuffle(l[len(mkr):]) # eat line (and shuffle tabs)
+                new = List_item(b, mkr) #type:ignore
+                return True
+            else: return mkr
+        return False # not ordered or unordered.
+
+    def realizeold(self) -> str:
+        # figure out if we're loose or tight
 
         # unpack paragraph if only content:
         if len(self.children) == 1 and isinstance(self.open_child, Paragraph):
             return "<li>" + inline_parse(self.open_child.contents, link_references) + "</li>"
 
+        # more complicated: if a paragraph isn't followed by another paragrah, then it should be
+        # unpacked into just the text inside
+        res = "<li>"
+        for i in range(len(self.children)):
+            child = self.children[i]
+            if isinstance(child, Paragraph) and (i+1 == len(self.children) or (not isinstance(self.children[i+1], Paragraph))):
+                # lone paragraph:
+                res += inline_parse(child.contents, link_references)
+            else: # let it fill out
+                res += '\n' + child.realize()
+        return res + "\n</li>" # TODO: final '\n' might be wrong
 
-        res = "<li>\n"
+    def realize(self)->str:
+        '''if parent list is "loose", paragraphs are wrapped in <p> tags, otherwise they aren't'''
+        
+        res = '<li>'
         for child in self.children:
-            res += child.realize() + '\n'
-        return res + "</li>"
+            if isinstance(child, Paragraph) and not self.parent.loose:
+                res += inline_parse(child.contents,link_references)
+            else:
+                res += ('\n' if res[-1] != '\n' else '') + child.realize() + '\n'
+        return res + '</li>'
+        
+
+
+
 
 
     is_containter:bool = True
 
-class Thematic_break(Block):
+class Block_quote(Block):
 
-    def __init__(self, parent: Block) -> None:
-        super().__init__(parent)
-        self.open = False # thematic breaks don't have content
 
-    def can_continue(self) -> bool:
-        return False # thematic breaks are one line only
+    @staticmethod
+    def can_interrupt(b: Block, laziness: int, peek=False) -> bool:
+        '''can a block quote go here?
+        
+        Block quotes defined by 0-3 indents followed by a carat: '>' and a space or tab,
+         or single carat '>' followed by no space or tab
+         if followed by a tab, that tab represents 3 spaces'''
+        
+        if not type(b) in (Block, Paragraph, List_item, Block_quote):
+            return False
+        # check indent:
+        if Block.current_line[0:4].replace('\t','    ').strip() == '': return False # too much indent
+
+        # eat whitespace, eat carat, eat ev space ( or tab)
+        l = Block.current_line.lstrip(' ')
+        if l[0] != '>': return False
+
+        if l[1] == ' ':
+            # one space, remove it
+            l = l[2:]
+        elif l[1] == '\t':
+            # tab is equal to two (?) spaces, since a space and caret are included in it
+            l = l.replace('\t', '  ',1)
+            l = tab_shuffle(l[1:])
+        else: # no space, remove caret only
+            l = l[1:]
+        
+        if not peek: new = Block_quote(b)
+        else: Block.current_line = l # eat marker only on can_continue
+        return True
     
-    def add_content(self, content: str):
-        raise AttributeError("Can't add to thematic break")
-    
-    def realize(self) -> str:
-        return "<hr />"
+    def can_continue(self) -> int:
+        '''if we have caret then remove it and continue, else it is lazy'''
 
-class ATX_heading(Block):
-
-    def __init__(self, parent: Block, level:int) -> None:
-        super().__init__(parent)
-        self.level = level
-
-    def can_continue(self) -> bool:
-        self.open = False
-        return False # ATX headings are one line only
-    
-    def add_content(self, content: str):
-        self.contents += content
-
-    def realize(self) -> str:
-        return f"<h{self.level}>" + inline_parse(self.contents, link_references) + f"</h{self.level}>"
-
-class Setext_heading(Block):
-
-    def __init__(self, parent: Block, c:str) -> None:
-
-        # check level:
-        self.level = 1 if c == '=' else 2
-
-        # grab paragraph as content
-        p = parent.open_child # type:ignore
-        con = p.contents # type: ignore
-        # delete paragraph:
-        parent.children.remove(p) # type:ignore
-        del(p)
-        super().__init__(parent, con)
-
-    def can_continue(self) -> bool:
-        self.open = False
-        return False # Setext are closed one created
+        if self.can_interrupt(self,2,peek=True):
+            return 2
+        else: return 1 # lazy
     
     def realize(self) -> str:
-        return f"<h{self.level}>" + inline_parse(self.contents, link_references) + f"</h{self.level}>"
-
-class Indented_code_block(Block):
-
-    parse_verbatim:bool = True
-
-    def can_continue(self) -> bool:
-        '''same as new code block'''
-        return self.is_indented_code_block()
-    
-    def add_content(self, content: str):
-        self.contents += content
-
-    def realize(self) -> str:
-
-        # trim empty lines: (should only trim start and end lines)
-        l = '\n'.join(filter(None,self.contents.split('\n'))) 
-
-        return "<pre><code>" + replace_danger(l) + ("</code></pre>" if l[-1] == '\n' else "\n</code></pre>")
-
+        res = "<blockquote>\n"
+        for child in self.children:
+            res += child.realize() + '\n'
+        return res + "</blockquote>"
+   
 class Fenced_code_block(Block):
 
     parse_verbatim:bool = True
 
-    def __init__(self, parent: Block, delimiter:str) -> None:
+    def __init__(self, parent: Block, delimiter:str, indent:int) -> None:
         self.delimiter = delimiter
+        self.indent = indent
         super().__init__(parent)
 
+    @staticmethod
+    def can_interrupt(b: Block, laziness: int) -> bool:
+        '''is the next a fenced code block
+        
+        fenced code blocks start with 0-3 indents followed by at least three of either `` ` `` or `~`,
+        following the start, the next whitespace separated string is the info-string (rest of line discarded),
+        after this the code block is ended by the same symbol, it may be ended on the same line (in which case there's no info string),
+        if inline, the check fails and is treated in the inline part of parsing
+        returns the type of delimiter if true else false'''
+        
+        # can only interrupt a few things:
+        if not type(b) in (Block, Paragraph, List_item, Block_quote):
+            return False
+        # check indent:
+        if Block.current_line[0:4].replace('\t','    ').strip() == '': return False # too much indent
 
-    def can_continue(self) -> bool:
-        '''continues as long as we don't cee the breaking line'''
+        # rest of indent irrelevant:
+        l = Block.current_line.lstrip(' ')
+        # but needs to be counted for later:
+        ind = len(Block.current_line) - len(l)
 
-        if Block.current_line.strip() == self.delimiter * 3:
+
+        if not ((c := l[0]) in ('`', '~')):
+            return False # wrong character
+        
+        # count number of ticks:
+        n = len(l) - len(l.lstrip(c))
+        if n < 3: return False # too few
+        if c == '`' and l.count(c) != n: return False # no more ticks in start
+        # for tildes it's fine
+        
+        Block.current_line = l[n:] # remove the actual fence
+        new = Fenced_code_block(b,c*n, ind)
+        return True
+
+
+    def can_continue(self) -> int:
+        '''continues as long as we don't see the breaking line'''
+        
+        if Block.current_line.strip() == self.delimiter: # can't have anything else 
             Block.current_line = "" # Get rid of it from the end result
-            return True
-        else: return False
+            return 0
+        else: return 2
 
     def add_content(self, content: str):
         self.contents += content
@@ -694,64 +633,169 @@ class Fenced_code_block(Block):
     def realize(self) -> str:
 
         s = self.contents.split('\n')
+        s[0]
         info = sanitize_text(s.pop(0))
+        
+
+        s = map(lambda x: lstrip2(x,' ', self.indent), s) # strip leading whitespace
         self.contents = '\n'.join(filter(None,s)) # without first line and filtered
         info_s = (' class="language-' + info.split()[0] + '"') if len(info) > 0 else ""
 
         return "<pre><code"+ info_s + ">" + sanitize_text(self.contents, False, False, True) + "\n</code></pre>"
 
-class HTML_block(Block):
+class Indented_code_block(Block):
 
-    parse_verbatim:bool = True
+    def can_continue(self) -> int:
+        '''if proper indent, we can continue, blank lines can also continue'''
+        if self.can_interrupt(self, 2, peek=True):
+            return 2
+        elif Block.current_line.strip() == '': return 2
+        else: return 0
+    
+    @staticmethod
+    def can_interrupt(b: Block, laziness: int, peek=False) -> bool:
+        '''is this an indented codeblock
+        indented code blocks are lines beginning with 4 indentations, followed by arbitrary text.
+        Indented code blocks cannot interrupt paragraphs'''
+        
+        # can only interrupt a few things (notably not paragraph):
+        if not type(b) in (Block, List_item, Block_quote) and not peek:
+            return False
+        
+        # otherwise it's just a question of if there's 4 or more indents
+        # if tab is involved, spaces before tabs are not carried through
+        st = Block.current_line[0:4] # relevant part
+        if st == '    ':
+            #it is good
+            l = Block.current_line[4:]
+        elif '\t' in st:
+            # keep everything after first tab
+            _,_, l = Block.current_line.partition('\t')
+        else:
+            return False
+        if not peek: new = Indented_code_block(b)
+        else: Block.current_line = l # only eat on can_continue
+        return True
+
+    def add_content(self, content: str):
+        self.contents += content
+
+    def realize(self) -> str:
+
+        # trim empty lines: (TODO: should only trim start and end lines)
+        s = self.contents.split('\n')
+        while s[0] == '': s.pop(0) # inefficient but simple
+        while s[-1] == '': s.pop(-1)
+        l = '\n'.join(s) 
+
+        return "<pre><code>" + replace_danger(l) + "\n</code></pre>"
+
+one_tags = ["<pre", "<script", "<style", "<textarea"]
+six_tags = ["address", "article", "aside", "base", "basefont", "blockquote", "body", "caption", "center", "col",
+            "colgroup", "dd", "details", "dialog", "dir", "div", "dl", "dt", "fieldset", "figcaption", "figure",
+            "footer", "form", "frame", "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head", "header", "hr",
+            "html", "iframe", "legend", "li", "link", "main", "menu", "menuitem", "nav", "noframes", "ol",
+            "optgroup", "option", "p", "param", "search", "section", "summary", "table", "tbody", "td", "tfoot",
+            "th", "thead", "title", "tr", "track", "ul"]
+six_tags.extend(['/' + s for s in six_tags]) # closing tags allowed as well
+six_tags = ['<' + x for x in six_tags] # add initial bracket
+six_tags.extend([s + '/' for s in six_tags]) # and extra closing /
+class HTML_block(Block):
     
     def __init__(self, parent: Block, type:int) -> None:
         self.type = type
         super().__init__(parent)
+        self.open = True
 
-        # check if should close automatically:
-        if not self.can_continue():
-            self.open = False
+    @staticmethod
+    def can_interrupt(b: Block, laziness: int) -> bool:
+        '''does a html block start here
+        
+        seven conditions start and end a HTML block. this returns the number of the condition fulfilled, or 0 if not.
+        contained text should be kept as is. line can also end same place it begins
+        Also note! type 7 can't interrupt a paragraph'''
+        if not type(b) in (Block, Paragraph, List_item, Block_quote):
+            return False
+        # check indent:
+        if Block.current_line[0:4].replace('\t','    ').strip() == '': return False # too much indent
 
+        l = Block.current_line.rstrip()
 
-    def can_continue(self) -> bool:
+        # two: HTML comment
+        if l[0:4] == "<!--":
+            t = 2
+
+        # three: PHP tag:
+        elif l[0:2] == "<?":
+            t = 3
+
+        # four: other comment?
+        elif l[0:2] == "<!":
+            t = 4
+
+        # five: CDATA:
+        elif l[0:9] == "<![CDATA[":
+            t = 5
+
+        # one: start of area
+        elif l.split()[0].lower() in one_tags:
+            lr = ''.join(l.split()[1:]).strip()
+            if not lr in ('>', ''): return False # invalid tag
+            else: t =1
+        
+        elif l.split()[0].lower() in six_tags:
+            lr = ''.join(l.split()[1:]).strip()
+            if not lr in ('>','/>', ''): return False # invalid tag
+            else: t = 6
+        else:
+            # check 7
+            if isinstance(b, Paragraph): return False # 7 can't interrupt paragraph
+            if not is_HTML_tag(l): return False # invalid tag
+            else: t = 7
+        # now valid start, else would have returned already
+        new = HTML_block(b,t)
+        return True
+    
+    def can_continue(self) -> int:
         '''7 different conditions, woah.
         If condition found add rest of line verbatim'''
+        if not self.open: return 0 # already closed
 
         if self.type == 1: # closing tag
             for sub in ["</pre>", "</script>", "</style>", "</textarea>"]:
                 if sub in Block.current_line.lower():
                     # it's the last line:
                     self.open = False
-                    return True
+                    return 2
         
-        if self.type == 2:
+        elif self.type == 2:
             if "-->" in Block.current_line:
                 # it's the last line:
                 self.open = False
-                return True
+                return 2
         
-        if self.type == 3:
+        elif self.type == 3:
             if "?>" in Block.current_line:
                 # it's the last line:
                 self.open = False
-                return True
+                return 2
                     
-        if self.type == 4:
+        elif self.type == 4:
             if "!>" in Block.current_line:
                 # it's the last line:
                 self.open = False
-                return True
+                return 2
         
-        if self.type == 5:
+        elif self.type == 5:
             if "]]>" in Block.current_line:
                 # it's the last line:
                 self.open = False
-                return True
-        if self.type >= 6: # six or seven
-            if Block.current_line.strip() == "":
-                return False # no need to add empty line
+                return 2
+        elif self.type >= 6: # six or seven
+            if Block.current_line.strip() == '':
+                return 0 # no need to add empty line
         
-        return True # if not stopped keep on reading
+        return 2 # if not stopped keep on reading
         
     def add_content(self, content: str):
         self.contents += content
@@ -761,13 +805,19 @@ class HTML_block(Block):
 
 class Paragraph(Block):
     
-    def can_continue(self) -> bool:
-        if not Block.current_line.strip() == "": return True
-        self.open = False # paragraph can't be lazy
-        return False
+    def can_continue(self) -> int:
+        if not self.open: return 0 
+        if not Block.current_line.strip() == "": return 2
+        self.open = False # can't have whitespace
+        return 0
 
     def add_content(self, content: str):
         self.contents += content
+
+    @staticmethod
+    def can_interrupt(b: Block, laziness: int) -> bool:
+        return False # paragraph can't interrupt, but get created when
+        # things are added to container blocks
 
     def realize(self) -> str: # strip 0 to 3 spaces before
         return "<p>" + inline_parse(self.contents, link_references) + "</p>"
@@ -775,12 +825,38 @@ class Paragraph(Block):
 link_references= [] # references have: label, link, and title
 class Link_reference(Block):
 
-    def can_continue(self) -> bool:
-        if not Block.current_line.strip() == "": return True
-        self.open = False # link reference can't be lazy
+    def can_continue(self) -> int:
+        if not Block.current_line.strip() == "": return 2
         self.evaluate_ref() # check if valid link
-        return False
+        return 0
     
+    @staticmethod
+    def can_interrupt(b: Block, laziness: int) -> bool:
+        '''is this a link reference
+        
+        link references are comprised of a link label preceeded by 0-3 indentation
+        then a colon `:`, then (with optional whitespace including up to one line break)
+        a link destination, then (at least one whitespace)
+        an optional link title. and no further elements.
+        
+        plan is to treat a potential link reference as link reference, then regress to paragraph is not
+        (link reference also cannot interrupt a paragraph)'''
+
+        if not type(b) in (Block, Paragraph, List_item, Block_quote):
+            return False
+        # check indent:
+        if Block.current_line[0:4].replace('\t','    ').strip() == '': return False # too much indent
+
+        # early parsing:
+        l = Block.current_line.rstrip(' ')
+        if l[0] != '[': return False
+        label,_,rest = l[1:].partition(']') # rest may be empty if title continues
+        if len(label)>0 and (not valid_label_name(label)): return False
+
+        new = Link_reference(b)
+        return True
+
+
     def add_content(self, content: str):
         self.contents += content
     
@@ -851,25 +927,3 @@ class Link_reference(Block):
     def realize(self) -> str:
         if self.open: self.evaluate_ref() # just in case we're last
         return '' # link references aren't printed
-
-
-def parse_md(text:StringIO)->str:
-    '''
-    Takes a string-input (like a file) comprising a .md document,
-    and returns a string containing the equivalent
-    HTML.  (perhaps make it a string output as well?)
-    
-    '''
-    Block.init(text)
-    while Block.read_line(): pass # read all lines
-
-    return Block.root.realize()
-
-
-
-if __name__ == "__main__":
-    
-    test_str = '</imatag attr="woah" attr2="oh baby" _23 = true\n >'
-    is_HTML_tag(test_str)
-    # testcase = StringIO(testcase)
-    # print(parse_md(testcase))
