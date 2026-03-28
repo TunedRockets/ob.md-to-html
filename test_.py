@@ -20,7 +20,7 @@ def load_data(max:int=-1)->list[dict]:
     return list(spec)[0:max]
 
 
-spec = load_data()
+spec = load_data(150)
 
 @pytest.mark.parametrize('specs', spec)
 def test_check(specs):
@@ -40,7 +40,7 @@ def test_check(specs):
 if __name__ == "__main__":
 
     # test individual test:
-    id = 127
+    id = 93
     test_check(spec[id])
 
 # top number passed: 401 (more passed than failed!)

@@ -36,12 +36,11 @@ class Block():
     root:"Block"
     current_line:str
     current_open:"Block"
-    some_lazy:bool = False
 
     def __init__(self,parent:"Block|None", contents:str = "") -> None:
         self.contents:str = contents
         self.open:bool = True # blocks are open unless otherwise specified
-        self.lazy:bool = False # blocks are not lazy unless otherwise specified
+
         
         
         if not parent is None:
@@ -71,15 +70,7 @@ class Block():
     def read_line()->bool:
         '''
         reads a new line from the input and updates the block tree.
-        Procedure:
-        1. check if current open can stay open,
-        if it cant, close it and move open up a level, if it can (lazily), pass that on.
-        if any block is lazy, it's children must be lazy as well
-        2. if it can, next check if new line can cause an interruption
-        2a. if no add to open and move on
-        2b. if yes, check if it interrupts inside or outside, then set that as open and check
-        the line again.
-
+        
         returns true on successful read, and false if EOF is reached.
         '''
 
@@ -88,11 +79,11 @@ class Block():
 
         if Block.current_line == '': return False # EOF
 
-        # get deepest open: (0:closed, 1:lazy, 2:open)
+
         b = Block.root
-        Block.some_lazy = False
+
         while not (b.open_child) is None:
-            if b.open_child.can_continue():
+            if b.open_child.open and b.open_child.can_continue(): # if manually closed we break
                 b = b.open_child
             else:
                 break # child is closed
@@ -100,7 +91,8 @@ class Block():
         b:Block # for intellisense
         while True:
             for t in Block.__subclasses__():
-                if not (new := t.can_interrupt(b)) is None: # an above lazy necessitates the rest be lazy
+                if not (new := t.can_interrupt(b)) is None:
+
                     # new block is now the lowest open
                     if new.can_continue(): # if it can't then return to 
                         b = new 
@@ -117,6 +109,15 @@ class Block():
         return True # start on next line
         
 
+    def reparent(self, new_parent:"Block"):
+        '''reparent this block to a new parent,
+        old parent's open child will become none, but
+        this should only be called to reparent off of a closed parent anyways'''
+        self.parent.children.remove(self)
+        new_parent.children.append(self)
+        new_parent.open_child = self
+        self.parent = new_parent
+        return; 
 
         
     @staticmethod
@@ -127,10 +128,7 @@ class Block():
         raise NotImplementedError("root can't interrupt")
     
     def can_continue(self)->int:
-        '''Checks if block can continue on next line, and consumes any indicative markers
-        lazy lists and quote blocks will return the conditional 1, indicating lazyness.
-        it will still consume indents for lazyness, if parent is lazy then child is lazy as well
-        if false, will not consume anything and return 0'''
+        '''Checks if block can continue on next line, and consumes any indicative markers.'''
         
         return 2 # root can always continue
 
@@ -226,7 +224,7 @@ class ATX_heading(Block):
 
 class Setext_heading(Block):
 
-    def __init__(self, parent: Block, c:str) -> None:
+    def __init__(self, parent: Block, c:str,dont_eat:bool = False) -> None:
 
         # check level:
         self.level = 1 if c == '=' else 2
@@ -238,21 +236,21 @@ class Setext_heading(Block):
         else: p = parent.open_child # type:ignore
         con = p.contents # type: ignore
         # delete paragraph:
-        parent.children.remove(p) # type:ignore
-        del(p)
+        if not dont_eat:
+            parent.children.remove(p) # type:ignore
+            del(p)
         super().__init__(parent, con)
 
     @staticmethod
-    def can_interrupt(b:"Block")->"Setext_heading|None":
+    def can_interrupt(b:"Block", dont_eat:bool = False)->"Setext_heading|None":
         '''headings can only interrupt "standard" blocks
         
         Setext heading indicators are up to three spaces of indentation, followed by 1 or more 
         matching `-` or `=` characters, followed by any number of spaces and tabs
         returns character if true and empty string
         '''
-        # setext only interrupts paragraphs (and not lazy ones)
+        # setext only interrupts paragraphs
         if not isinstance(b, Paragraph): return None
-        if Block.some_lazy: return None
         
 
 
@@ -268,9 +266,8 @@ class Setext_heading(Block):
             if c2 != c:
                 return None # other kind of character
         # else:
-        # delete line:
-        Block.current_line = ''
-        new = Setext_heading(b,c)
+        # Block.current_line = '' don't eat now, eat later
+        new = Setext_heading(b,c,dont_eat)
         return new
 
     def can_continue(self) -> bool:
@@ -280,7 +277,7 @@ class Setext_heading(Block):
         else: return False # Setext headings are one line only
 
     def add_content(self, content: str):
-        pass # already grabbed the content
+        pass # already grabbed the content, eat underline line
     
     def realize(self) -> str:
         return f"<h{self.level}>" + inline_parse(self.contents, link_references) + f"</h{self.level}>"
@@ -292,13 +289,6 @@ class Thematic_break(Block):
         if list_interrupt:
             # gotta go another layer up
             parent = parent.parent
-        elif Block.some_lazy: # don't know correct order of these ifs
-            # instead go down the tree
-            b = Block.root
-            while not b.open_child is None:
-                if not b.open_child.lazy: b = b.open_child
-                else: break
-            parent = b
 
         super().__init__(parent)
 
@@ -337,13 +327,13 @@ class Thematic_break(Block):
             # ensure enough characters:
         if l.count(c) < 3: return None # too few
 
-        Block.current_line = ''
+        # Block.current_line = '' don't eat now, eat later
         new = Thematic_break(b, list_interrupt)
         return new
 
             
     def add_content(self, content: str):
-        pass # can't add content to themaic break
+        pass # can't add content to themaic break (eats line)
     
     def realize(self) -> str:
         return "<hr />"
@@ -569,14 +559,21 @@ class Block_quote(Block):
     def can_continue(self) -> bool:
         '''if we have caret then remove it and continue, else it is lazy,
         '''
-
-
         if self.can_interrupt(self,peek=True):
-            self.lazy = False
+            return True
         else: 
-            self.lazy = True
-            Block.some_lazy = True
-        return True
+            if Block.current_line.strip() == '': 
+                self.open = False
+                return False # empty line breaks laziness
+            # lazy check, if anything except paragraph can start, we need to end
+            for t in Block.__subclasses__():
+                # long line for edge case:
+                if new := t.can_interrupt(self) or (t == Setext_heading and isinstance(self.open_child, Paragraph) and (new := t.can_interrupt(self.open_child, dont_eat=True))):
+                    new.parent.children.remove(new) # clean up
+                    del(new)
+                    self.open = False
+                    return False
+            else: return True
     
     def realize(self) -> str:
         res = "<blockquote>\n"
@@ -634,10 +631,6 @@ class Fenced_code_block(Block):
         '''continues as long as we don't see the breaking line,
         break at least as long as start (can be longer)'''
 
-        # if self.startline: # to ensure it can continue on the first line
-        #     self.startline = False
-        #     return True
-
         l = Block.current_line.strip()
         if l == '' or (not l.replace(l[0],'') == ''): return True # empty or something else there
 
@@ -657,17 +650,17 @@ class Fenced_code_block(Block):
         s[0]
         info = sanitize_text(s.pop(0))
         
-
-        s = map(lambda x: lstrip2(x,' ', self.indent), s) # strip leading whitespace
-        self.contents = '\n'.join(filter(None,s)) # without first line and filtered
+        self.contents = '\n'.join(s) # without first line and filtered
         info_s = (' class="language-' + info.split()[0] + '"') if len(info) > 0 else ""
 
-        return "<pre><code"+ info_s + ">" + sanitize_text(self.contents, False, False, True) + "\n</code></pre>"
+        return "<pre><code"+ info_s + ">" + sanitize_text(self.contents, False, False, True) + "</code></pre>"
 
 class Indented_code_block(Block):
 
     def can_continue(self) -> bool:
         '''if proper indent, we can continue, blank lines can also continue'''
+
+
         
         if Block.current_line.strip() == '':
             # up to 4 indents should be stripped
