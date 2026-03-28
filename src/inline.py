@@ -33,7 +33,7 @@ def inline_parse(text:str, link_references)->str:
 
     out = [""] # improvement over v1, out is a list of strings
     # better this than a linked list and allows some pointer-like things
-    stream = fakestream(text.lstrip(' '))
+    stream = fakestream(text.lstrip())
     
     while (c := stream.read(1)) != '':
         

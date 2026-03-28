@@ -40,6 +40,7 @@ class Block():
     def __init__(self,parent:"Block|None", contents:str = "") -> None:
         self.contents:str = contents
         self.open:bool = True # blocks are open unless otherwise specified
+        self.lazy:bool = False # blocks are not lazy unless otherwise specified
         
         
         if not parent is None:
@@ -53,6 +54,7 @@ class Block():
             self.parent.open_child = self # set oneself as the open child
         else:
             # for the root:
+            self.parent = None #type:ignore
             self.is_containter = True
         self.children:list["Block"] = []
         self.open_child:"Block|None" = None
@@ -87,11 +89,16 @@ class Block():
 
         # get deepest open: (0:closed, 1:lazy, 2:open)
         b = Block.root
-        o_list = []
+        o_list = [2]
         while not (b.open_child) is None:
-            o_list.append(b.can_continue())
-            b = b.open_child
-        o_list.append(b.can_continue())
+            child_cont = b.open_child.can_continue()
+            if child_cont:
+                o_list.append(child_cont)
+                b = b.open_child
+            else:
+                break # child is closed
+        # now b is lowest open that doesn't have open child
+        b:Block # for intellisense
         while True:
             # b is lowest, if they can continue we close them and go up the tree
             if o_list[-1] == 0:
@@ -101,13 +108,15 @@ class Block():
                 continue # return to start
             # else: b is open or lazy, check for interrupts
             for t in Block.__subclasses__():
-                if t.can_interrupt(b, o_list[-1]):
+                if t.can_interrupt(b, min(o_list)): # an above lazy necessitates the rest be lazy
                     # "add" new block to the stack:
-                    # first make sure it wasn't added outside:
-                    if b.open_child is None: b = b.parent
+                    # make sure we have the right new open:
+                    if (not b.parent is None) and b.parent.open_child != b: # first statement for the root
+                        new_child = b.parent.open_child
+                    else: new_child = b.open_child
 
-                    o_list.append(b.open_child.can_continue()) #type:ignore
-                    b = b.open_child # make new block the open one
+                    o_list.append(new_child.can_continue()) #type:ignore
+                    b = new_child # type:ignore make new block the open one
                     break # this falls past the else into a continue
             else:
                 # did not find any interrupt, add content to open
@@ -255,6 +264,7 @@ class Setext_heading(Block):
         # setext only interrupts paragraphs (and not lazy ones)
         if not isinstance(b, Paragraph) or laziness == 1:
             return False
+        
 
 
         # check indent:
@@ -288,7 +298,12 @@ class Setext_heading(Block):
 
 class Thematic_break(Block):
 
-    def __init__(self, parent: Block) -> None:
+    def __init__(self, parent: Block, list_interrupt:bool=False) -> None:
+
+        if list_interrupt:
+            # gotta go another layer up
+            parent = parent.parent
+
         super().__init__(parent)
 
     def can_continue(self) -> int:
@@ -303,8 +318,11 @@ class Thematic_break(Block):
         thematic breaks are up to three spaces of indentation, followed by 3 or more 
         matching `-`, `_`, or `*` characters, followed by any number of spaces and tabs'''
 
-        if not type(b) in (Block, Paragraph, Block_quote, List_item):
+        if not type(b) in (Block, Paragraph, Block_quote, List_item, List_Block):
             return False
+        
+        list_interrupt =(type(b) == List_Block)
+        # special case, has to go out a layer when instancing
 
         # check indent:
         if Block.current_line[0:4].replace('\t','    ').strip() == '': return False # too much indent
@@ -323,7 +341,7 @@ class Thematic_break(Block):
         if l.count(c) < 3: return False # too few
 
         Block.current_line = ''
-        new = Thematic_break(b)
+        new = Thematic_break(b, list_interrupt)
         return True
 
             
@@ -363,7 +381,7 @@ class List_Block(Block):
     
     def can_continue(self) -> int:
         '''If next line can continue as list item, or is new list item, then we can continue.
-        HOW DO?'''
+        '''
         # if a new item can be made (of same marker), or an item can continue, then it's fine,
         # and blank lines can also continue
         if m:= List_item.can_interrupt(self, 2,peek=True):
@@ -384,6 +402,7 @@ class List_Block(Block):
 
         if not type(b) in (Block, Paragraph, Block_quote, List_item):
             return False
+        
 
         # if list item could interrupt then i can as well:
         if m := List_item.can_interrupt(b, laziness,peek=True):
@@ -465,6 +484,9 @@ class List_item(Block):
             elif n_spaces > 4: n_spaces = 1 # rest is code block
 
             mkr = c + ' ' * n_spaces
+
+            # if in a list we must match marker
+            if hasattr(b, "marker") and b.marker != mkr: return False #type: ignore
             
             if not peek: 
                 Block.current_line = tab_shuffle(l[len(mkr):]) # eat line (and shuffle tabs)
@@ -514,7 +536,7 @@ class List_item(Block):
         
         res = '<li>'
         for child in self.children:
-            if isinstance(child, Paragraph) and not self.parent.loose:
+            if isinstance(child, Paragraph) and not self.parent.loose: #type:ignore
                 res += inline_parse(child.contents,link_references)
             else:
                 res += ('\n' if res[-1] != '\n' else '') + child.realize() + '\n'
@@ -562,11 +584,16 @@ class Block_quote(Block):
         return True
     
     def can_continue(self) -> int:
-        '''if we have caret then remove it and continue, else it is lazy'''
+        '''if we have caret then remove it and continue, else it is lazy,
+        '''
+
 
         if self.can_interrupt(self,2,peek=True):
+            self.lazy = False
             return 2
-        else: return 1 # lazy
+        else: 
+            self.lazy = True
+            return 1 # lazy
     
     def realize(self) -> str:
         res = "<blockquote>\n"
@@ -670,7 +697,8 @@ class Indented_code_block(Block):
             l = Block.current_line[4:]
         elif '\t' in st:
             # keep everything after first tab
-            _,_, l = Block.current_line.partition('\t')
+            r,_, l = Block.current_line.partition('\t')
+            if r.strip() != '': return False # things before tab
         else:
             return False
         if not peek: new = Indented_code_block(b)
