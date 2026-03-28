@@ -40,7 +40,7 @@ def test_check(specs):
 if __name__ == "__main__":
 
     # test individual test:
-    id = 92
+    id = 127
     test_check(spec[id])
 
 # top number passed: 401 (more passed than failed!)

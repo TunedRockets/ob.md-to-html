@@ -412,7 +412,7 @@ class List_Block(Block):
         res = "<ul>\n" if (self.marker[0] in ('-','+','*')) else "<ol>\n"
         for child in self.children:
             res += child.realize() + '\n'
-        return res + "</ul>" if (self.marker[0] in ('-','+','*')) else "</ol>"
+        return res + ("</ul>" if (self.marker[0] in ('-','+','*')) else "</ol>")
 
     is_containter:bool = True
 
@@ -440,7 +440,7 @@ class List_item(Block):
         l =Block.current_line.replace('\t', '    ')
         n_space = len(l) - len(l.lstrip(' '))
         req_space = len(self.marker)
-        if n_space > req_space:
+        if n_space >= req_space:
             # clean up marker:
             if not peek: Block.current_line = l[req_space:]
             return True
@@ -484,7 +484,7 @@ class List_item(Block):
             mkr = c + ' ' * n_spaces
 
             # if in a list we must match marker
-            if hasattr(b, "marker") and b.marker != mkr: return None #type: ignore
+            if isinstance(b, List_Block) and b.marker != mkr: return None #type: ignore
             
             if not peek: 
                 Block.current_line = tab_shuffle(l[len(mkr):]) # eat line (and shuffle tabs)
@@ -591,6 +591,7 @@ class Fenced_code_block(Block):
     def __init__(self, parent: Block, delimiter:str, indent:int) -> None:
         self.delimiter = delimiter
         self.indent = indent
+        # self.startline = True # get first line as well
         super().__init__(parent)
 
     @staticmethod
@@ -630,9 +631,17 @@ class Fenced_code_block(Block):
 
 
     def can_continue(self) -> bool:
-        '''continues as long as we don't see the breaking line'''
-        
-        if Block.current_line.strip() == self.delimiter: # can't have anything else 
+        '''continues as long as we don't see the breaking line,
+        break at least as long as start (can be longer)'''
+
+        # if self.startline: # to ensure it can continue on the first line
+        #     self.startline = False
+        #     return True
+
+        l = Block.current_line.strip()
+        if l == '' or (not l.replace(l[0],'') == ''): return True # empty or something else there
+
+        if self.delimiter in l: # at least as long
             Block.current_line = "" # Get rid of it from the end result
             return False
         else: return True
@@ -641,6 +650,8 @@ class Fenced_code_block(Block):
         self.contents += content
     
     def realize(self) -> str:
+
+        if self.contents in ('\n', ''): return "<pre><code></code></pre>"
 
         s = self.contents.split('\n')
         s[0]
@@ -657,9 +668,14 @@ class Indented_code_block(Block):
 
     def can_continue(self) -> bool:
         '''if proper indent, we can continue, blank lines can also continue'''
-        if self.can_interrupt(self, peek=True):
+        
+        if Block.current_line.strip() == '':
+            # up to 4 indents should be stripped
+            Block.current_line = Block.current_line.replace(' ', '', 4)
             return True
-        elif Block.current_line.strip() == '': return True
+        
+        elif self.can_interrupt(self, peek=True):
+            return True
         else: return False
     
     @staticmethod
