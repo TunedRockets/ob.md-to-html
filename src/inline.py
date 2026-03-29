@@ -52,15 +52,14 @@ def inline_parse(text:str, link_references)->str:
             else: out.extend([t, '']) # type:ignore
             continue
 
-        if (t := parse_inline_autolink(stream, c)):
-            out.extend([t,'']) #type:ignore
-            continue
-
         if (t := parse_inline_HTML(stream,c)):
             out.extend([t, '']) # type:ignore
             continue
 
-        
+        if (t := parse_inline_autolink(stream, c)):
+            out.extend([t,'']) #type:ignore
+            continue
+
         if (t := parse_inline_escape(stream,c)):
             out[-1] += t # type:ignore
             continue
@@ -189,13 +188,13 @@ def parse_inline_HTML(stream:fakestream, c:str)->str|bool:
         if c2 == '':
             # reached EOF, so that's a false
             stream.move(-len(buf))
-            return '&lt;'
+            return False
 
     if is_HTML_tag('<' + buf + '>'):
         return '<' + buf + '>'
     else:
         stream.move(-len(buf)-1)
-        return '&lt;'
+        return False
 
 
 def parse_inline_autolink(stream:fakestream, c:str):

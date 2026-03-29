@@ -40,6 +40,7 @@ class Block():
     def __init__(self,parent:"Block|None", contents:str = "") -> None:
         self.contents:str = contents
         self.open:bool = True # blocks are open unless otherwise specified
+        self.lazy:bool = False # needed for some minor cases
 
         
         
@@ -148,7 +149,7 @@ class Block():
         res = ""
         for child in self.children:
             res += child.realize()
-            res += '\n' if res[-1] != '\n' else '' # make sure each is separated by newline
+            res += '\n' if (len(res)>0 and res[-1] != '\n') else '' # make sure each is separated by newline
         # strip extra newlines:
         if (len(res) > 0) and (res[-1] == '\n'): return res.rstrip('\n') + '\n'
         else: return res
@@ -251,7 +252,8 @@ class Setext_heading(Block):
         # setext only interrupts paragraphs
         if not isinstance(b, Paragraph): return None
 
-        # TODO: and NOT in lazy continuations (how check?)
+        # not in lazy continuations
+        if b.parent.lazy: return None
         
 
 
@@ -560,7 +562,10 @@ class Block_quote(Block):
     def can_continue(self) -> bool:
         '''if we have caret then remove it and continue, else it is lazy,
         '''
+        
+
         if self.can_interrupt(self,peek=True):
+            self.lazy = False # not lazy
             return True
         else: 
             if Block.current_line.strip() == '': 
@@ -574,7 +579,9 @@ class Block_quote(Block):
                     del(new)
                     self.open = False
                     return False
-            else: return True
+            else:
+                self.lazy = True # lazy continuation
+                return True
     
     def realize(self) -> str:
         res = "<blockquote>\n"
@@ -631,17 +638,20 @@ class Fenced_code_block(Block):
     def can_continue(self) -> bool:
         '''continues as long as we don't see the breaking line,
         break at least as long as start (can be longer)'''
+        if not self.open: return False
 
-        l = Block.current_line.strip()
-        if l == '' or (not l.replace(l[0],'') == ''): return True # empty or something else there
+        l = lstrip2(Block.current_line,' ',3).rstrip()
+        if l == '': return True # empty line
+        if l.replace(self.delimiter[0],'') != '': return True # something else there
 
         if self.delimiter in l: # at least as long
             Block.current_line = "" # Get rid of it from the end result
+            self.open = False
             return False
         else: return True
 
     def add_content(self, content: str):
-        self.contents += content
+        self.contents += lstrip2(content, ' ', self.indent)
     
     def realize(self) -> str:
 
@@ -750,7 +760,8 @@ class HTML_block(Block):
         # check indent:
         if Block.current_line[0:4].replace('\t','    ').strip() == '': return None # too much indent
 
-        l = Block.current_line.rstrip()
+        l = Block.current_line.lstrip()
+        t = 0
 
         # two: HTML comment
         if l[0:4] == "<!--":
@@ -760,29 +771,34 @@ class HTML_block(Block):
         elif l[0:2] == "<?":
             t = 3
 
-        # four: other comment?
-        elif l[0:2] == "<!":
-            t = 4
-
         # five: CDATA:
         elif l[0:9] == "<![CDATA[":
             t = 5
 
+        # four: other comment?
+        elif l[0:2] == "<!":
+            t = 4
+
         # one: start of area
-        elif l.split()[0].lower() in one_tags:
-            lr = ''.join(l.split()[1:]).strip()
-            if not lr in ('>', ''): return None # invalid tag
-            else: t =1
+        if t == 0: # not found yet
+            for start in one_tags:
+                if l.startswith(start):
+                    if (len(l)>len(start) and l[len(start)] in (' ','\t','\n','>')):
+                        t = 1
+                        break
+
         
-        elif l.split()[0].lower() in six_tags:
-            lr = ''.join(l.split()[1:]).strip()
-            if not lr in ('>','/>', ''): return None # invalid tag
-            else: t = 6
-        else:
-            # check 7
-            if isinstance(b, Paragraph): return None # 7 can't interrupt paragraph
-            if not is_HTML_tag(l): return None # invalid tag
-            else: t = 7
+        # six: starts with regular tag
+        if t == 0:
+            for start in six_tags:
+                if l.startswith(start):
+                    if (len(l)>len(start) and l[len(start)] in (' ','\t','\n','>')) or (len(l)>len(start)+1 and l[len(start):len(start)+2] == '/>'):
+                        t = 6
+                        break
+            else: # seven, random tag alone on line
+                if isinstance(b, Paragraph): return None # 7 can't interrupt paragraph
+                if not is_HTML_tag(l.rstrip()): return None # invalid tag
+                else: t = 7
         # now valid start, else would have returned already
         new = HTML_block(b,t)
         return new
@@ -824,6 +840,7 @@ class HTML_block(Block):
                 return True
         elif self.type >= 6: # six or seven
             if Block.current_line.strip() == '':
+                self.open = False
                 return False # no need to add empty line
         
         return True # if not stopped keep on reading
@@ -832,26 +849,8 @@ class HTML_block(Block):
         self.contents += content
     
     def realize(self) -> str:
-        return self.contents
+        return self.contents.rstrip('\n') # edge case
 
-class Paragraph(Block):
-    
-    def can_continue(self) -> bool:
-        if not self.open: return False
-        if not Block.current_line.strip() == "": return True
-        self.open = False # can't have whitespace
-        return False
-
-    def add_content(self, content: str):
-        self.contents += content
-
-    @staticmethod
-    def can_interrupt(b: Block) -> None:
-        return None # paragraph can't interrupt, but get created when
-        # things are added to container blocks
-
-    def realize(self) -> str: # strip 0 to 3 spaces before
-        return "<p>" + inline_parse(self.contents, link_references) + "</p>"
 
 link_references= [] # references have: label, link, and title
 class Link_reference(Block):
@@ -879,7 +878,7 @@ class Link_reference(Block):
         if Block.current_line[0:4].replace('\t','    ').strip() == '': return None # too much indent
 
         # early parsing:
-        l = Block.current_line.rstrip(' ')
+        l = Block.current_line.lstrip()
         if l[0] != '[': return None
         label,_,rest = l[1:].partition(']') # rest may be empty if title continues
         if len(label)>0 and (not valid_label_name(label)): return None
@@ -920,8 +919,16 @@ class Link_reference(Block):
         # for redundancy, check link label:
         cont = self.contents.lstrip(' ')
         if cont[0] != '[': return False
+                
+        # find unescaped `]`:
+        if (m := re.search(UNESCAPED_BRACE, cont)) is None: return False # no close, invalid
+        # split on the unescaped brace:
+        label = cont[1:m.end()-1]
+        rest = cont[m.end():]
         
-        label,_,rest = cont[1:].partition(']')
+
+
+
         if not valid_label_name(label): return False
 
         # check for colon:
@@ -933,7 +940,7 @@ class Link_reference(Block):
         if rest[0] == '<':
             # braced destination
             # find unescaped right brace
-            m = re.search('(?<!\\)[>]',rest)
+            m = re.search('(?<!\\)>',rest)
             if m is None: return False # no closing `<`
             # else:
             dest = rest[1:m.start()]
@@ -958,3 +965,22 @@ class Link_reference(Block):
     def realize(self) -> str:
         if self.open: self.evaluate_ref() # just in case we're last
         return '' # link references aren't printed
+
+class Paragraph(Block):
+    
+    def can_continue(self) -> bool:
+        if not self.open: return False
+        if not Block.current_line.strip() == "": return True
+        self.open = False # can't have whitespace
+        return False
+
+    def add_content(self, content: str):
+        self.contents += content
+
+    @staticmethod
+    def can_interrupt(b: Block) -> None:
+        return None # paragraph can't interrupt, but get created when
+        # things are added to container blocks
+
+    def realize(self) -> str: # strip 0 to 3 spaces before
+        return "<p>" + inline_parse(self.contents, link_references) + "</p>"

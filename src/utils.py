@@ -137,8 +137,8 @@ def URI_sanitize(link:str):
 
 
 
-HTML_REF_WORD = r'[^\\](\\\\)*(&[a-zA-Z0-9]+;)' # will not match if first in string so make sure to pad
-HTML_REF_DIGIT = r'[^\\](\\\\)*(&#[Xx]?[a-fA-F0-9]{1,7};)'
+HTML_REF_WORD = r'(^|[^\\])(\\\\)*(&[a-zA-Z0-9]+;)' # TODO: ensure '([^\\]|^)' works 
+HTML_REF_DIGIT = r'(^|[^\\])(\\\\)*(&#[Xx]?[a-fA-F0-9]{1,7};)'
 ASCII_PUNCTUATION_ESCAPE = r'\\[!"#$%&\'()*+,-./:;<=>?@\[\\\]\^_`{|}~]'
 HTML_Danger = {'"': "&quot;", '&': "&amp;", '<': "&lt;", '>': "&gt;", '\u0000' : '\uFFFD'}
 def sanitize_text(s:str, escape:bool=True, resolve_refs:bool=True, replace_dangerous:bool=True)->str:
@@ -150,22 +150,29 @@ def sanitize_text(s:str, escape:bool=True, resolve_refs:bool=True, replace_dange
 
 
     if resolve_refs:
-        mm = re.findall(HTML_REF_WORD,' '+ s) # padding for leading reference
-        for m in mm:
-            if m[-1] in HTML_ENTITIES.keys():
-                tgt = "".join(m)
-                val = "".join(m[:-1]) + HTML_ENTITIES[m[-1]]['characters']
-                s = s.replace(tgt,val) # keep ignored backslashes
-        mm = re.findall(HTML_REF_DIGIT,' '+ s)
-        for m in mm:
+        # difficult because findall doesn't allow overlap
+        donor = s
+        while not (m:=re.search(HTML_REF_WORD, donor)) is None:
+            mg = m.groups('') # make the empty ones '' not None
+            tgt = m[0]
+            if mg[2] in HTML_ENTITIES.keys():
+                val = mg[0] + mg[1] + HTML_ENTITIES[mg[2]]['characters']
+                s = s.replace(tgt,val,1)
+            donor = donor[m.end():] # remove from consideration
+
+        while not (m:=re.search(HTML_REF_DIGIT, donor)) is None:
             try:
-                i = int(m[-1][3:-1],16) if m[-1][2] in ('X','x') else int(m[-1][2:-1])
-                tgt = "".join(m)
-                val = "".join(m[:-1]) + chr(i) # TODO: does not repace invalid characters with \uFFFD
-                s = s.replace(tgt,val) # keep ignored backslashes
+                tgt = m[0]
+                mg = m.groups('') # make the empty ones '' not None
+                i = int(mg[2][3:-1],16) if mg[2][2] in ('X','x') else int(mg[2][2:-1])
+                val = mg[0] + mg[1] + chr(i) # TODO: does not repace invalid characters with \uFFFD
+                s = s.replace(tgt,val,1) # keep ignored backslashes
             except ValueError: pass # for the case of gibberish hex-dec
+            donor = donor[m.end():] # remove from consideration
+        # NOTE: might technically break if the same code is escaped several times 
+        # in the same line, but with different number of escapes
+        # so replace with positioning based on index instead of replace()?
     if escape:
-        mm = re.findall(ASCII_PUNCTUATION_ESCAPE, s)
         while (m:= re.search(ASCII_PUNCTUATION_ESCAPE, s)):
                 s = s.replace(m[0],m[0][1])
     if replace_dangerous: # might be a better way but this works
@@ -240,16 +247,20 @@ def valid_email(email:str):
     if re.fullmatch(EMAIL_SPEC,email): return True
     else: return False
 
+UNESCAPED_BRACE = r'(^|[^\\])(\\\\)*]'
 def valid_label_name(name:str):
     '''checks if label name is valid, bust have at least one non-whitespace character
     and must not have any unescaped `]`, and a max of 999 chars long, name assumed to be sanitized of opening and closing brackets'''
     if len(name) > 999: return False
     if len(name.strip()) == 0: return False
-    if re.search(r'\w*\](?<!\\)', name): return False # looking for unescaped `]`
+    if re.search(UNESCAPED_BRACE, name): return False # looking for unescaped `]`
     return True
 
 def label_collapse(label:str)->str:
     '''perform operations to collapse label in reference links'''
+
+    label = sanitize_text(label, True,False,False) # not technically correct,
+    # but the way the system works this is easier, and the false positives should be minimal
 
     label = label.casefold().strip().replace('\t',' ').replace('\n',' ')
     label = " ".join(label.split())
@@ -274,7 +285,7 @@ def tab_shuffle(s:str)->str:
 
 
 if __name__ == "__main__":
-    teststr = '&#xcab;'
+    teststr = 'f&ouml;&ouml;&lt;'
     print(sanitize_text(teststr))
 
     

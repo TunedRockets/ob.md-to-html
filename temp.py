@@ -1,8 +1,8 @@
 import re
 
 
-s = "ö"
+PATTERN = r'(^|[ac])b'
 
-i = s.encode()
-for b in i:
-    print(f'{b:X}')
+string = 'b ab cb dbb'
+for m in re.finditer(PATTERN, string):
+    print("match:", m, m.start())
