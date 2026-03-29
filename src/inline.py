@@ -384,6 +384,7 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)-
 
         # check if inline, reference, collapsed, or shortcut
         buf = [stream.read(1)]
+        may_invalid = False
         match buf[0]:
 
             case '[':
@@ -486,8 +487,9 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)-
                     title = ''
                 
             case _:
-                # shortcut
+                # shortcut or invalid
                 stream.move(-1) # back up
+                may_invalid = True
                 label=link_content
                 content = link_content
                 title=""
@@ -499,6 +501,13 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)-
                 if label_collapse(label) == l['label']:
                     if l['title'] != '': title = l['title']
                     dest = l['dest']
+                    break
+            else:
+                if may_invalid:
+                    # invalid shortcut
+                    stream.move(-len(buf)+1)
+                    delimeter_stack.remove(delim)
+                    return ']'
 
         # have valid, close out
         

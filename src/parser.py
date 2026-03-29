@@ -22,6 +22,9 @@ def parse_md(text:StringIO)->str:
     HTML.  (perhaps make it a string output as well?)
     
     '''
+    global link_references
+    link_references = []
+
     Block.init(text)
     while Block.read_line(): pass # read all lines
 
@@ -514,7 +517,6 @@ class List_item(Block):
                 res += ('\n' if res[-1] != '\n' else '') + child.realize() + '\n'
         return res + '</li>'
 
-
 class Block_quote(Block):
 
     @staticmethod
@@ -851,17 +853,32 @@ class HTML_block(Block):
     def realize(self) -> str:
         return self.contents.rstrip('\n') # edge case
 
-
-link_references= [] # references have: label, link, and title
+link_references= [] # references have: label, link, and title (clean before use)
 class Link_reference(Block):
 
+    def __init__(self, parent: Block | None, contents: str = "") -> None:
+        self.startline = True
+        super().__init__(parent, contents)
+
     def can_continue(self) -> int:
-        if not Block.current_line.strip() == "": return True
+
+        if self.startline: # to ensure it can continue on the first line
+            self.startline = False
+            return True
+        if not self.open: return False
+        
+        if self.can_interrupt(self, peek=True): # new link takes precedence
+            self.open = False
+            self.evaluate_ref() # check if valid link
+            return False
+        elif not Block.current_line.strip() == "": return True # other non-empty line we can continue on
+        #else:
+        self.open = False
         self.evaluate_ref() # check if valid link
         return False
     
     @staticmethod
-    def can_interrupt(b: Block) -> "Link_reference|None":
+    def can_interrupt(b: Block, peek:bool=False) -> "Link_reference|None|bool":
         '''is this a link reference
         
         link references are comprised of a link label preceeded by 0-3 indentation
@@ -872,7 +889,7 @@ class Link_reference(Block):
         plan is to treat a potential link reference as link reference, then regress to paragraph is not
         (link reference also cannot interrupt a paragraph)'''
 
-        if not type(b) in (Block, Paragraph, List_item, Block_quote):
+        if not peek and not type(b) in (Block, Paragraph, List_item, Block_quote):
             return None
         # check indent:
         if Block.current_line[0:4].replace('\t','    ').strip() == '': return None # too much indent
@@ -881,10 +898,12 @@ class Link_reference(Block):
         l = Block.current_line.lstrip()
         if l[0] != '[': return None
         label,_,rest = l[1:].partition(']') # rest may be empty if title continues
-        if len(label)>0 and (not valid_label_name(label)): return None
+        if len(label.lstrip())>0 and (not valid_label_name(label)): return None
 
-        new = Link_reference(b)
-        return new
+        if not peek:
+            new = Link_reference(b)
+            return new
+        else: return True
 
 
     def add_content(self, content: str):
@@ -902,9 +921,9 @@ class Link_reference(Block):
             self.open = False # close yourself
         else:
             # revert to paragraph (create paragraph, give it contents, kill self)
-            p = Paragraph(self.parent)
+            p = Paragraph(self.parent) if not isinstance(self.open_child,Paragraph) else self.open_child
             p.open = False # we got closed so it's closed
-            p.contents = self.contents
+            p.contents += self.contents
             self.parent.children.remove(self) # orphan yourself
             del(self) # kill yourself
 
@@ -918,13 +937,14 @@ class Link_reference(Block):
 
         # for redundancy, check link label:
         cont = self.contents.lstrip(' ')
-        if cont[0] != '[': return False
+        if len(cont) == 0 or cont[0] != '[': return False
                 
         # find unescaped `]`:
         if (m := re.search(UNESCAPED_BRACE, cont)) is None: return False # no close, invalid
         # split on the unescaped brace:
         label = cont[1:m.end()-1]
         rest = cont[m.end():]
+        label = label.strip('\n') # in case we wrote over multiple lines
         
 
 
@@ -936,15 +956,18 @@ class Link_reference(Block):
         else: rest = rest[1:] # remove colon
 
         # now rest has destination and title.
+        # TODO: this could be simpler since a space is required between destination and title
+
         rest = rest.lstrip() # remove whitespace
+        if len(rest) < 2: return False # need some kind of link, even if empty
         if rest[0] == '<':
             # braced destination
-            # find unescaped right brace
-            m = re.search('(?<!\\)>',rest)
-            if m is None: return False # no closing `<`
+            # find unescaped `>`
+            m = re.search(UNESCAPED_ANG_BRACE,rest)
+            if m is None: return False # no closing `>`
             # else:
-            dest = rest[1:m.start()]
-            title = rest[m.start():].strip()
+            dest = rest[1:m.end()-1]
+            title = rest[m.end():]
         else: # non bracketed destination:
             count = 0
             dests = []
@@ -957,10 +980,20 @@ class Link_reference(Block):
                 dests.append(c)
             dest = "".join(dests)
             # apparently valid destination (if subsequent title is valid)
-            title = rest[len(dest):].strip()
-        if not valid_link_title(title): return False
+            title = rest[len(dest):]
+
+        if len(title) > 0 and (not title[0] in (' ', '\t', '\n')):return False # need whitespace separation
+
+        if not valid_link_title(title.strip()): 
+            # move title to next paragraph and try again
+
+            p = Paragraph(self.parent) # new paragraph
+            p.contents = title
+            self.contents = self.contents.replace(title,'') # remove title
+
+            return self.isvalid() # recurse
         # finally if nothing shouted false, return values
-        return label, dest, title[1:-1] # title trimmed of containers
+        return label, dest, title.strip()[1:-1] # title trimmed of containers
     
     def realize(self) -> str:
         if self.open: self.evaluate_ref() # just in case we're last

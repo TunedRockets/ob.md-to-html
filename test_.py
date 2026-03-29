@@ -20,7 +20,7 @@ def load_data(max:int=-1)->list[dict]:
     return list(spec)[0:max]
 
 
-spec = load_data()
+spec = load_data(300)
 
 @pytest.mark.parametrize('specs', spec)
 def test_check(specs):
@@ -35,13 +35,12 @@ def test_check(specs):
         print(html)
     assert guess.strip() == html.strip()
 
-
+def test_33():
+    test_check(spec[33])
 
 if __name__ == "__main__":
 
     # test individual test:
-    id = 32
+    id = 197
     test_check(spec[id])
 
-# top number passed: 401 (more passed than failed!)
-# < 11 is tab issues

@@ -225,29 +225,34 @@ def valid_destination_link(link:str, allow_incomplete:bool=True):
         if count < 0: return False
     return True
 
-def valid_link_title(title:str)->bool:
-    '''checks if link title, including enclosing characters, is valid'''
-    if title == '': return True
-    if title[0] == '"' and title[-1] == '"':
-        if re.search(r'\w*["](?<!\\)',title[1:-1]): return False
-        else: return True
-
-    elif title[0] == "'" and title[-1] == "'":
-        if re.search(r"\w*['](?<!\\)",title[1:-1]): return False
-        else: return True
-
-    elif title[0] == '(' and title[-1] == ')':
-        if re.search(r'\w*[()](?<!\\)',title[1:-1]): return False
-        else: return True
-    else: return False
-
 EMAIL_SPEC = r"/^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/"
 def valid_email(email:str):
     '''valid email is anything that matches the "non-normative regex from the HTML5 spec"'''
     if re.fullmatch(EMAIL_SPEC,email): return True
     else: return False
 
-UNESCAPED_BRACE = r'(^|[^\\])(\\\\)*]'
+UNESCAPED_START = r'(^|[^\\])(\\\\)*'
+def valid_link_title(title:str)->bool:
+    '''checks if link title, including enclosing characters, is valid'''
+    if title == '': return True
+    if title[0] == '"' and title[-1] == '"':
+        if re.search(UNESCAPED_START + r'"',title[1:-1]): return False
+        else: return True
+
+    elif title[0] == "'" and title[-1] == "'":
+        if re.search(UNESCAPED_START + r"'",title[1:-1]): return False
+        else: return True
+
+    elif title[0] == '(' and title[-1] == ')':
+        if re.search(UNESCAPED_START + r')',title[1:-1]): return False
+        else: return True
+    else: return False
+
+
+
+UNESCAPED_PAR = UNESCAPED_START + r'\)'
+UNESCAPED_ANG_BRACE = UNESCAPED_START + r'>'
+UNESCAPED_BRACE = UNESCAPED_START + r']'
 def valid_label_name(name:str):
     '''checks if label name is valid, bust have at least one non-whitespace character
     and must not have any unescaped `]`, and a max of 999 chars long, name assumed to be sanitized of opening and closing brackets'''
