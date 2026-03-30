@@ -28,6 +28,8 @@ def parse_md(text:StringIO)->str:
     Block.init(text)
     while Block.read_line(): pass # read all lines
 
+    Link_reference.evaluate_all()
+
     return Block.root.realize()
 
 
@@ -49,8 +51,8 @@ class Block():
         
         if not parent is None:
 
-            # don't want to be child to paragraph (only time that would matter)
-            if isinstance(parent, Paragraph): parent = parent.parent
+            # don't want to be child to paragraph or link reference (only time that would matter)
+            if type(parent) in (Link_reference, Paragraph): parent = parent.parent
 
             self.parent:"Block" = parent
 
@@ -68,6 +70,7 @@ class Block():
         Block.root = Block(None)
         Block.input = input
         Block.reread_line = False
+        Link_reference.link_instances = []
         
 
     @staticmethod
@@ -157,8 +160,6 @@ class Block():
         if (len(res) > 0) and (res[-1] == '\n'): return res.rstrip('\n') + '\n'
         else: return res
         
-    
-
   
 
     def __repr__(self) -> str:
@@ -188,7 +189,7 @@ class ATX_heading(Block):
         the heading level is equal to the number of `#` characters in the opening sequence.
         '''
 
-        if not type(b) in (Block, Paragraph, Block_quote, List_item):
+        if not type(b) in (Block, Paragraph, Block_quote, List_item, Link_reference):
             return None
 
         # check indent:
@@ -226,6 +227,7 @@ class ATX_heading(Block):
     def realize(self) -> str:
         return f"<h{self.level}>" + inline_parse(self.contents, link_references) + f"</h{self.level}>"
 
+SETEXT_RE = r'^(-+|=+)$' # TODO: test
 class Setext_heading(Block):
 
     def __init__(self, parent: Block, c:str) -> None:
@@ -245,15 +247,15 @@ class Setext_heading(Block):
         super().__init__(parent, con)
 
     @staticmethod
-    def can_interrupt(b:"Block")->"Setext_heading|None":
+    def can_interrupt(b:"Block")->"Setext_heading|None|bool":
         '''headings can only interrupt "standard" blocks
         
         Setext heading indicators are up to three spaces of indentation, followed by 1 or more 
         matching `-` or `=` characters, followed by any number of spaces and tabs
         returns character if true and empty string
         '''
-        # setext only interrupts paragraphs
-        if not isinstance(b, Paragraph): return None
+        # setext only interrupts paragraphs (and link references)
+        if not type(b) in (Paragraph, Link_reference): return None
 
         # not in lazy continuations
         if b.parent.lazy: return None
@@ -265,14 +267,17 @@ class Setext_heading(Block):
 
         
         # now strip of whitespace and check for characters:
+        
         l = Block.current_line.strip() # spaces not allowed inside
-        if not ((c := l[0]) in ('-', '=')):
-            return None # not right character
-        for c2 in l:
-            if c2 != c:
-                return None # other kind of character
+        
+        m = re.match(SETEXT_RE, l) # if setext it will match
+        if m is None: return None
+        # else:
+        c = l[0]
         # else:
         # Block.current_line = '' don't eat now, eat later
+        if type(b) == Link_reference:
+            return True # link is peeking ahead, don't actually make a new
         new = Setext_heading(b,c)
         return new
 
@@ -310,7 +315,7 @@ class Thematic_break(Block):
         thematic breaks are up to three spaces of indentation, followed by 3 or more 
         matching `-`, `_`, or `*` characters, followed by any number of spaces and tabs'''
 
-        if not type(b) in (Block, Paragraph, Block_quote, List_item, List_Block):
+        if not type(b) in (Block, Paragraph, Block_quote, List_item, List_Block, Link_reference):
             return None
         
         
@@ -393,7 +398,7 @@ class List_Block(Block):
         critically they don't remove the marker, that's for the item to do'''
         #TODO: same logic as list item
 
-        if not type(b) in (Block, Paragraph, Block_quote, List_item):
+        if not type(b) in (Block, Paragraph, Block_quote, List_item, Link_reference):
             return None
         
 
@@ -534,7 +539,7 @@ class Block_quote(Block):
          or single carat '>' followed by no space or tab
          if followed by a tab, that tab represents 3 spaces'''
         
-        if not type(b) in (Block, Paragraph, List_item, Block_quote):
+        if not type(b) in (Block, Paragraph, List_item, Block_quote, Link_reference):
             return None
         # check indent:
         if Block.current_line[0:4].replace('\t','    ').strip() == '': return None # too much indent
@@ -612,7 +617,7 @@ class Fenced_code_block(Block):
         returns the type of delimiter if true else false'''
         
         # can only interrupt a few things:
-        if not type(b) in (Block, Paragraph, List_item, Block_quote):
+        if not type(b) in (Block, Paragraph, List_item, Block_quote, Link_reference):
             return None
         # check indent:
         if Block.current_line[0:4].replace('\t','    ').strip() == '': return None # too much indent
@@ -856,8 +861,12 @@ class HTML_block(Block):
 link_references= [] # references have: label, link, and title (clean before use)
 class Link_reference(Block):
 
+    link_instances:list[Link_reference] = []
+
     def __init__(self, parent: Block | None, contents: str = "") -> None:
         self.startline = True
+        self.link_instances.append(self)
+        self.evaluated = False
         super().__init__(parent, contents)
 
     def can_continue(self) -> int:
@@ -866,15 +875,24 @@ class Link_reference(Block):
             self.startline = False
             return True
         if not self.open: return False
-        
+
+        for t in Block.__subclasses__(): # preempt interruption, to close correctly
+                if new := t.can_interrupt(self):
+                    # cleanup new:
+                    if isinstance(new, Block):
+                        new.parent.children.remove(new)
+                        del(new)
+                    self.open = False
+                    self.evaluate_ref()
+                    return False
         if self.can_interrupt(self, peek=True): # new link takes precedence
             self.open = False
-            self.evaluate_ref() # check if valid link
+            self.evaluate_ref()
             return False
-        elif not Block.current_line.strip() == "": return True # other non-empty line we can continue on
+        if not Block.current_line.strip() == "": return True # other non-empty line we can continue on
         #else:
+        self.evaluate_ref()
         self.open = False
-        self.evaluate_ref() # check if valid link
         return False
     
     @staticmethod
@@ -889,7 +907,7 @@ class Link_reference(Block):
         plan is to treat a potential link reference as link reference, then regress to paragraph is not
         (link reference also cannot interrupt a paragraph)'''
 
-        if not peek and not type(b) in (Block, Paragraph, List_item, Block_quote):
+        if not peek and not type(b) in (Block, List_item, Block_quote):
             return None
         # check indent:
         if Block.current_line[0:4].replace('\t','    ').strip() == '': return None # too much indent
@@ -908,10 +926,22 @@ class Link_reference(Block):
 
     def add_content(self, content: str):
         self.contents += content
+
+    @staticmethod
+    def evaluate_all():
+        '''Evaluates and then deletes all link references'''
+        for b in Link_reference.link_instances:
+            b.evaluate_ref()
+        
+        Link_reference.link_instances = [] # reset
+
     
     def evaluate_ref(self):
         '''check if link reference is valid, if it is, add to list of references, else
         regress to paragraph.'''
+        if self.evaluated: return;
+        self.evaluated = True
+
         if (t :=self.isvalid()):
             link_references.append({
                 "label": label_collapse(t[0]), # type:ignore
@@ -984,8 +1014,11 @@ class Link_reference(Block):
 
         if len(title) > 0 and (not title[0] in (' ', '\t', '\n')):return False # need whitespace separation
 
-        if not valid_link_title(title.strip()): 
-            # move title to next paragraph and try again
+        if not valid_link_title(title.strip()):
+            
+            # if title is on it's own line, then perhaps it's not a title at all
+            if title.replace('\t','').strip(' ')[0] != '\n': return False # nope that's just false
+            # move "title" to next paragraph and try again
 
             p = Paragraph(self.parent) # new paragraph
             p.contents = title
