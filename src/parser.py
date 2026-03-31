@@ -374,6 +374,7 @@ class List_Block(Block):
         
         super().__init__(parent)
         self.marker = marker
+        self.maybe_loose = False
         self.loose = False
         '''A list is loose if any of it's constituents are separated by blank lines, or if any item directly contains
         two block-level elements with a blank line between them'''
@@ -386,10 +387,16 @@ class List_Block(Block):
             # just check equality:
             return self.marker == m
         # ordered (remove value first)
-        n,s,m = m.partition(' ')
-        m = n[-1] + s + m # get rid of number
-        n,s,my_m = self.marker.partition(' ')
-        my_m = n[-1] + s + my_m
+        if '.' in self.marker: c = '.' 
+        else: c = ')'
+
+        bef, dot, aft = self.marker.partition(c)
+        bef = ' ' * (len(bef) - len(bef.lstrip(' '))) # just spaces
+        my_m = bef + dot + aft
+
+        bef, dot, aft = m.partition(c)
+        bef = ' ' * (len(bef) - len(bef.lstrip(' ')))
+        m = bef + dot + aft
         return my_m == m
     
     def can_continue(self) -> bool:
@@ -397,12 +404,14 @@ class List_Block(Block):
         '''
         # if a new item can be made (of same marker), or an item can continue, then it's fine,
         # and blank lines can also continue
+        # blank lines indicate looseness, (as long as something is added after?)
+        if Block.current_line.strip() == '': self.maybe_loose = True
+
         if m:= List_item.can_interrupt(self,peek=True):
             if self.marker_belongs(m): return True
         if self.open_child.can_continue(peek=True): # type:ignore
             return True
         elif Block.current_line.strip()=='': 
-            self.loose = True
             return True
         else: return False
     
@@ -426,10 +435,23 @@ class List_Block(Block):
         
 
     def realize(self) -> str:
-        res = "<ul>\n" if (self.marker[0] in ('-','+','*')) else "<ol>\n"
+
+        if self.marker.lstrip()[0] in ('-','+','*'):
+            start = '<ul>\n'
+            end = '</ul>'
+        else:
+            # figure out start number if not 1:
+            n = int(re.search(r'[0-9]+', self.marker)[0]) # type:ignore
+            if n != 1:
+                start = f'<ol start="{n}">\n'
+            else: start = '<ol>\n'
+            end = '</ol>'
+
+
+        res = start
         for child in self.children:
             res += child.realize() + '\n'
-        return res + ("</ul>" if (self.marker[0] in ('-','+','*')) else "</ol>")
+        return res + end
 
     is_containter:bool = True
 
@@ -440,18 +462,26 @@ class List_item(Block):
         self.marker = marker
         self.startline = True
 
+        # fix parent loosness:
+        if (not parent is None) and parent.maybe_loose:
+            parent.loose = True
+
 
     def can_continue(self, peek:bool=False) -> bool:
         '''to continue the list needs the right number of indents,
         number of indents is equal to the same column (after all other markers are removed)'''
 
-        # TODO: add lazyness
         if self.startline: # to ensure it can continue on the first line
             self.startline = False
+            self.twoline = Block.current_line.strip() == ''
             return True
-        if Block.current_line.strip()=='': 
-            self.parent.loose = True #type:ignore
+        if self.twoline and Block.current_line.strip() == '':
+            return False # can't have two empty lines
+        
+        if Block.current_line.strip()=='': # type:ignore 
+            self.parent.maybe_loose = True #type:ignore
             return True # empty lines can continue
+
 
         # expand tabs and get number of spaces:
         l =Block.current_line.replace('\t', '    ')
@@ -460,6 +490,8 @@ class List_item(Block):
         if n_space >= req_space:
             # clean up marker:
             if not peek: Block.current_line = l[req_space:]
+            # check looseness:
+            if self.parent.maybe_loose: self.parent.loose = True # type:ignore
             return True
         return False
     
@@ -488,23 +520,27 @@ class List_item(Block):
         # check indent:
         if Block.current_line[0:4].replace('\t','    ').strip() == '': return None # too much indent
 
-        l = Block.current_line.lstrip().replace('\t', '   ',1) # in case there is a tab
+        # count indent: 
+        ind = len(Block.current_line) - len(l := Block.current_line.lstrip())
+
+        l = l.replace('\t', '   ',1) # in case there is a tab
 
         # figure out the marker: (marker is followed by 1-4 spaces, if more then
         # count as no spaces and the rest is a code-block)
         if (c := l[0]) in ('-','+','*'):
 
             n_spaces = len(l[1:].replace('\t','    ')) - len(l[1:].replace('\t','    ').lstrip(' '))
+            if l.rstrip() == '-': n_spaces = 1 # empty point still counts
             if n_spaces == 0: return None # not enough spaces
             elif n_spaces > 4: n_spaces = 1 # rest is code block
 
-            mkr = c + ' ' * n_spaces
+            mkr = ' '* ind + c + ' ' * n_spaces
 
             # if in a list we must match marker
             if isinstance(b, List_Block) and b.marker != mkr: return None #type: ignore
             
             if not peek: 
-                Block.current_line = tab_shuffle(l[len(mkr):]) # eat line (and shuffle tabs)
+                Block.current_line = tab_shuffle(l[len(mkr)-ind:]) # eat line (and shuffle tabs)
                 new = List_item(b,mkr) #type:ignore
                 return new
             else: return mkr
@@ -512,15 +548,14 @@ class List_item(Block):
         # match ordered list:
         ORD_MATCH = r'[0-9]{1,9}[\.\)]'
         if m:= re.match(ORD_MATCH, l):
-            i = int(m[0][:-1])
             n_spaces = len(l[len(m[0]):]) - len(l[len(m[0]):].lstrip(' '))
             if n_spaces == 0: return None # not enough spaces
             elif n_spaces > 4: n_spaces = 1 # rest is code block
 
-            mkr = m[0] + ' ' * n_spaces
+            mkr = ' '* ind + m[0] + ' ' * n_spaces
             
             if not peek: 
-                Block.current_line = tab_shuffle(l[len(mkr):]) # eat line (and shuffle tabs)
+                Block.current_line = tab_shuffle(l[len(mkr)-ind:]) # eat line (and shuffle tabs)
                 new = List_item(b, mkr) #type:ignore
                 return new
             else: return mkr
@@ -533,7 +568,7 @@ class List_item(Block):
         res = '<li>'
         for child in self.children:
             if isinstance(child, Paragraph) and not self.parent.loose: #type:ignore
-                res += inline_parse(child.contents,link_references)
+                res += inline_parse(child.contents,link_references) 
             else:
                 res += ('\n' if res[-1] != '\n' else '') + child.realize() + '\n'
         return res + '</li>'
@@ -604,15 +639,21 @@ class Block_quote(Block):
 
             # lazy check, if anything except paragraph can start inside, we need to end
             if not self.open_child is None:
-                # if child is anything but open paragraph we close:
-                if not (isinstance(self.open_child, Paragraph) and self.open_child.open):
+                # criterion to continue:
+                # most child block is open paragraph
+                # noting can interrupt the paragraph
+                low_child = self.open_child
+                while not low_child.open_child is None:
+                    low_child = low_child.open_child
+                
+                if not (isinstance(low_child, Paragraph) and low_child.open):
                     self.open = False
                     return False
 
                 # put in one extra space (for lazy interpretation purposes):
                 Block.current_line = ' ' + Block.current_line
                 for t in Block.__subclasses__():
-                    if t.can_interrupt(self.open_child, peek = True):
+                    if t.can_interrupt(low_child, peek = True):
                         self.open = False
                         return False
                 else:
