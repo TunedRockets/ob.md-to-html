@@ -71,6 +71,36 @@ class Block():
         Block.input = input
         Block.reread_line = False
         Link_reference.link_instances = []
+
+    def is_lazy(self, indent:int)->bool:
+        '''checks if current line is possibly a lazy continuation line,
+        used for lists and quotes.
+        
+        Lazy continuation lines are "paragraph continuation lines"
+        meaning lowest open child is a paragraph, and nothing can interrupt that,,
+        indent is applied before rest of line is parsed, this is for block quotes
+        because the block quote marker space is lazily included,
+        may be the same for lists.'''
+        if self.open_child is None: return False # have no child to continue
+        if Block.current_line.strip() == '': return False # empty lines break laziness
+
+        low_child = self.open_child
+        while not low_child.open_child is None:
+            low_child = low_child.open_child # get lowest open child
+        
+        if not (isinstance(low_child, Paragraph) and low_child.open):
+            return False # not open paragraph
+
+        # put in extra space (for interpretation purposes):
+        Block.current_line = ' ' * indent + Block.current_line
+
+        for t in Block.__subclasses__(): # make sure nothing is interrupting the low child
+            if t.can_interrupt(low_child, peek = True):
+                return False
+        else: 
+            return True
+
+
         
 
     @staticmethod
@@ -380,24 +410,32 @@ class List_Block(Block):
         two block-level elements with a blank line between them'''
     
     def marker_belongs(self, m:str)-> bool:
-        '''check if a marker belongs to this list'''
+        '''check if a marker belongs to this list,
+        note that indentation before marker need only be at least as much
+        not match'''
 
         # bullets:
-        if self.marker[0] in ('-','+','*'):
-            # just check equality:
-            return self.marker == m
+        if (c:=self.marker.lstrip()[0]) in ('-','+','*'):
+            # check indent and equality:
+            my_ind,_,_ = self.marker.partition(c)
+            ind,c2,_ = m.partition(c)
+            # if c matches, c2 is not empty
+            if c2 == '': return False
+
+            #it matches, now my_ind should be smaller than ind
+            return my_ind in ind
         # ordered (remove value first)
         if '.' in self.marker: c = '.' 
         else: c = ')'
 
         bef, dot, aft = self.marker.partition(c)
-        bef = ' ' * (len(bef) - len(bef.lstrip(' '))) # just spaces
-        my_m = bef + dot + aft
+        my_space = ' ' * (len(bef) - len(bef.lstrip(' '))) # just spaces
+        my_m = dot + aft
 
         bef, dot, aft = m.partition(c)
-        bef = ' ' * (len(bef) - len(bef.lstrip(' ')))
-        m = bef + dot + aft
-        return my_m == m
+        space = ' ' * (len(bef) - len(bef.lstrip(' ')))
+        m = dot + aft
+        return (my_m == m) and my_space in space # at least as long
     
     def can_continue(self) -> bool:
         '''If next line can continue as list item, or is new list item, then we can continue.
@@ -407,11 +445,13 @@ class List_Block(Block):
         # blank lines indicate looseness, (as long as something is added after?)
         if Block.current_line.strip() == '': self.maybe_loose = True
 
-        if m:= List_item.can_interrupt(self,peek=True):
+        if m:= List_item.can_interrupt(self,peek=True): # new item
             if self.marker_belongs(m): return True
+
         if self.open_child.can_continue(peek=True): # type:ignore
-            return True
-        elif Block.current_line.strip()=='': 
+            return True # same item
+        
+        elif Block.current_line.strip()=='': # empty row
             return True
         else: return False
     
@@ -420,7 +460,6 @@ class List_Block(Block):
         '''Lists can only interrupt paragraph or containter
         Lists can only start if there's a new list item.
         critically they don't remove the marker, that's for the item to do'''
-        #TODO: same logic as list item
 
         if not type(b) in (Block, Paragraph, Block_quote, List_item, Link_reference):
             return None
@@ -428,6 +467,9 @@ class List_Block(Block):
 
         # if list item could interrupt then i can as well:
         if m := List_item.can_interrupt(b,peek=True):
+
+            if Block.current_line.partition(m)[2].strip() == '' and isinstance(b,Paragraph):
+                return None # we can't interrupt paragraphs
             if peek: return True
             new = List_Block(b,m)
             return new
@@ -470,16 +512,21 @@ class List_item(Block):
     def can_continue(self, peek:bool=False) -> bool:
         '''to continue the list needs the right number of indents,
         number of indents is equal to the same column (after all other markers are removed)'''
+        # we can also be lazy, in which case we still return true on a paragraph continuation text
+        if not self.open: return False
 
-        if self.startline: # to ensure it can continue on the first line
+        if not peek and self.startline: # to ensure it can continue on the first line
             self.startline = False
             self.twoline = Block.current_line.strip() == ''
+            self.lazy = False
             return True
-        if self.twoline and Block.current_line.strip() == '':
+        if not peek and self.twoline and Block.current_line.strip() == '':
+            self.open = False
             return False # can't have two empty lines
         
         if Block.current_line.strip()=='': # type:ignore 
             self.parent.maybe_loose = True #type:ignore
+            self.lazy = False
             return True # empty lines can continue
 
 
@@ -492,7 +539,14 @@ class List_item(Block):
             if not peek: Block.current_line = l[req_space:]
             # check looseness:
             if self.parent.maybe_loose: self.parent.loose = True # type:ignore
+            self.lazy = False
             return True
+        # else: we're maybe lazy
+        if self.is_lazy(0): #TODO: what indent
+            self.lazy = True
+            return True
+        # else: close
+        self.open = False
         return False
     
     
@@ -530,14 +584,14 @@ class List_item(Block):
         if (c := l[0]) in ('-','+','*'):
 
             n_spaces = len(l[1:].replace('\t','    ')) - len(l[1:].replace('\t','    ').lstrip(' '))
-            if l.rstrip() == '-': n_spaces = 1 # empty point still counts
+            if l.rstrip() == c: n_spaces = 1 # empty point still counts
             if n_spaces == 0: return None # not enough spaces
             elif n_spaces > 4: n_spaces = 1 # rest is code block
 
             mkr = ' '* ind + c + ' ' * n_spaces
 
             # if in a list we must match marker
-            if isinstance(b, List_Block) and b.marker != mkr: return None #type: ignore
+            if isinstance(b, List_Block) and (not b.marker_belongs(mkr)): return None #type: ignore
             
             if not peek: 
                 Block.current_line = tab_shuffle(l[len(mkr)-ind:]) # eat line (and shuffle tabs)
@@ -549,11 +603,18 @@ class List_item(Block):
         ORD_MATCH = r'[0-9]{1,9}[\.\)]'
         if m:= re.match(ORD_MATCH, l):
             n_spaces = len(l[len(m[0]):]) - len(l[len(m[0]):].lstrip(' '))
+            if l.rstrip() == m[0]: n_spaces = 1 # empty point still counts
             if n_spaces == 0: return None # not enough spaces
             elif n_spaces > 4: n_spaces = 1 # rest is code block
+            
 
             mkr = ' '* ind + m[0] + ' ' * n_spaces
             
+            # extra check, since only '1.' is allowed to interrupt paragraphs
+            if isinstance(b, Paragraph) and m[0].lstrip()[:2] not in ('1)', '1.'):
+                return None
+
+
             if not peek: 
                 Block.current_line = tab_shuffle(l[len(mkr)-ind:]) # eat line (and shuffle tabs)
                 new = List_item(b, mkr) #type:ignore
@@ -574,6 +635,9 @@ class List_item(Block):
         return res + '</li>'
 
 class Block_quote(Block):
+
+    def __init__(self, parent: Block | None, contents: str = "") -> None:
+        super().__init__(parent, contents)
 
     @staticmethod
     @overload
@@ -624,44 +688,19 @@ class Block_quote(Block):
         if self.can_interrupt(self,peek=True, eat=True):
             self.lazy = False # not lazy
             return True
-        else: 
+        # else: 
+        self.lazy = True
+        if Block.current_line.strip() == '': 
+            self.open = False
+            return False # empty line breaks laziness
+    
+        # lazy check:
+        if self.is_lazy(1): # one extra space for implied '> '
             self.lazy = True
-            if Block.current_line.strip() == '': 
-                self.open = False
-                return False # empty line breaks laziness
-            
-            # if child is indent or fenced we can't continue lazy
-            if type(self.open_child) in (Fenced_code_block, Indented_code_block):
-                self.open = False
-                return False
-            
-            
-
-            # lazy check, if anything except paragraph can start inside, we need to end
-            if not self.open_child is None:
-                # criterion to continue:
-                # most child block is open paragraph
-                # noting can interrupt the paragraph
-                low_child = self.open_child
-                while not low_child.open_child is None:
-                    low_child = low_child.open_child
-                
-                if not (isinstance(low_child, Paragraph) and low_child.open):
-                    self.open = False
-                    return False
-
-                # put in one extra space (for lazy interpretation purposes):
-                Block.current_line = ' ' + Block.current_line
-                for t in Block.__subclasses__():
-                    if t.can_interrupt(low_child, peek = True):
-                        self.open = False
-                        return False
-                else:
-                    return True
-            else:
-                # no child, can't be lazy
-                self.open= False
-                return False
+            return True
+        else:
+            self.open= False
+            return False
     
     def realize(self) -> str:
         res = "<blockquote>\n"
@@ -939,7 +978,7 @@ class HTML_block(Block):
 link_references= [] # references have: label, link, and title (clean before use)
 class Link_reference(Block):
 
-    link_instances:list[Link_reference] = []
+    link_instances:list["Link_reference"] = []
 
     def __init__(self, parent: Block | None, contents: str = "") -> None:
         self.startline = True
