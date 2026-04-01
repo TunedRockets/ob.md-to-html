@@ -41,6 +41,6 @@ def test_check(specs):
 if __name__ == "__main__":
 
     # test individual test:
-    id = 255
+    id = 4
     test_check(spec[id])
 

@@ -47,7 +47,10 @@ class Block():
         self.open:bool = True # blocks are open unless otherwise specified
         self.lazy:bool = False # needed for some minor cases
 
-        
+        # looseness:
+        if hasattr(parent, "mayloose"):
+            if parent.mayloose: parent.loose = True # type:ignore
+
         
         if not parent is None:
 
@@ -103,7 +106,14 @@ class Block():
         else: 
             return True
 
-
+    def is_loose(self)->bool:
+        '''check if current line/status is conducive to looseness.
+        which requires an empty line, and a closed open_child or one that can't continue'''
+        if not Block.current_line.strip() == '': return False
+        if self.open_child is None: return False
+        if not self.open_child.open: return True
+        if self.open_child.can_continue(peek=True): return False
+        else: return True
         
 
     @staticmethod
@@ -408,6 +418,7 @@ class List_Block(Block):
         super().__init__(parent)
         self.marker = marker
         self.loose = False
+        self.mayloose = False
         '''A list is loose if any of it's constituents are separated by blank lines, or if any item directly contains
         two block-level elements with a blank line between them'''
     
@@ -439,21 +450,31 @@ class List_Block(Block):
         m = dot + aft
         return (my_m == m) and my_space in space # at least as long
     
+    
+
     def can_continue(self, peek=False) -> bool:
         '''If next line can continue as list item, or is new list item, then we can continue.
         '''
         # if a new item can be made (of same marker), or an item can continue, then it's fine,
         # and blank lines can also continue
 
+        if self.is_loose() and not peek:
+            self.mayloose = True
+        elif not peek:
+            self.mayloose = False
+        
+        
         if m:= List_item.can_interrupt(self,peek=True): # new item
             if self.marker_belongs(m): return True
 
+        
         if self.open_child.can_continue(peek=True): # type:ignore
             return True # same item
         
-        elif Block.current_line.strip()=='': # empty row
-            return True
-        else: return False
+        
+
+        # else: 
+        return False
     
     @staticmethod
     def can_interrupt(b:Block, peek=False)->"List_Block|None|bool":
@@ -477,6 +498,11 @@ class List_Block(Block):
         
 
     def realize(self) -> str:
+
+
+        # check if any child is loose (then i should be loose:)
+        for child in self.children:
+            if child.loose: self.loose = True #type: ignore
 
         if self.marker.lstrip()[0] in ('-','+','*'):
             start = '<ul>\n'
@@ -504,7 +530,8 @@ class List_item(Block):
         super().__init__(parent)
         self.marker = marker
         self.startline = True
-        self.last_empty = False # for looseness
+        self.mayloose = False # for looseness
+        self.loose = False
         
 
 
@@ -522,10 +549,17 @@ class List_item(Block):
         if not peek and self.twoline and Block.current_line.strip() == '':
             self.open = False
             return False # can't have two empty lines
+        
+        if self.is_loose() and not peek:
+            self.mayloose = True
+        elif not peek:
+            self.mayloose = False
 
         # empty lines are fine:
         if Block.current_line.strip() == '':
             return True
+
+        
         
     
         # expand tabs and get number of spaces:
@@ -545,9 +579,7 @@ class List_item(Block):
         self.open = False
         return False
     
-    def is_loose(self):
-        '''check if anything in it's children indicates looseness'''
-        # this is... TODO:
+    
     
     @staticmethod
     @overload
