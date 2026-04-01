@@ -110,8 +110,9 @@ class Block():
         '''check if current line/status is conducive to looseness.
         which requires an empty line, and a closed open_child or one that can't continue'''
         if not Block.current_line.strip() == '': return False
-        if self.open_child is None: return False
+        if self.open_child is None: return True # right?
         if not self.open_child.open: return True
+        if isinstance(self.open_child, List_item) and self.open_child.is_loose(): return True # i think?
         if self.open_child.can_continue(peek=True): return False
         else: return True
         
@@ -419,6 +420,7 @@ class List_Block(Block):
         self.marker = marker
         self.loose = False
         self.mayloose = False
+        self.twoloose=False # jank!
         '''A list is loose if any of it's constituents are separated by blank lines, or if any item directly contains
         two block-level elements with a blank line between them'''
     
@@ -460,8 +462,10 @@ class List_Block(Block):
 
         if self.is_loose() and not peek:
             self.mayloose = True
+            self.twoloose = True
         elif not peek:
-            self.mayloose = False
+            if self.twoloose: self.twoloose=False # jank jank jank
+            else: self.mayloose = False
         
         
         if m:= List_item.can_interrupt(self,peek=True): # new item
@@ -531,6 +535,7 @@ class List_item(Block):
         self.marker = marker
         self.startline = True
         self.mayloose = False # for looseness
+        self.twoloose = False # jank
         self.loose = False
         
 
@@ -552,8 +557,10 @@ class List_item(Block):
         
         if self.is_loose() and not peek:
             self.mayloose = True
+            self.twoloose = True
         elif not peek:
-            self.mayloose = False
+            if self.twoloose: self.twoloose=False # jank jank jank
+            else: self.mayloose = False
 
         # empty lines are fine:
         if Block.current_line.strip() == '':
@@ -664,7 +671,8 @@ class List_item(Block):
             if isinstance(child, Paragraph) and not self.parent.loose: #type:ignore
                 res += inline_parse(child.contents,link_references) 
             else:
-                res += ('\n' if res[-1] != '\n' else '') + child.realize() + '\n'
+                res += ('\n' if res[-1] != '\n' else '') + child.realize()
+                res += ('\n' if res[-1] != '\n' else '') # no double newlines
         return res + '</li>'
 
 class Block_quote(Block):
