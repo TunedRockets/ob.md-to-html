@@ -80,7 +80,8 @@ class Block():
         meaning lowest open child is a paragraph, and nothing can interrupt that,,
         indent is applied before rest of line is parsed, this is for block quotes
         because the block quote marker space is lazily included,
-        may be the same for lists.'''
+        may be the same for lists.
+        also flips the lazy bool (before checking for interrupts)'''
         if self.open_child is None: return False # have no child to continue
         if Block.current_line.strip() == '': return False # empty lines break laziness
 
@@ -93,9 +94,11 @@ class Block():
 
         # put in extra space (for interpretation purposes):
         Block.current_line = ' ' * indent + Block.current_line
+        self.lazy = True
 
         for t in Block.__subclasses__(): # make sure nothing is interrupting the low child
             if t.can_interrupt(low_child, peek = True):
+                self.lazy = False
                 return False
         else: 
             return True
@@ -171,7 +174,7 @@ class Block():
         else return false'''
         raise NotImplementedError("root can't interrupt")
     
-    def can_continue(self)->int:
+    def can_continue(self, peek=False)->int:
         '''Checks if block can continue on next line, and consumes any indicative markers.'''
         
         return 2 # root can always continue
@@ -211,7 +214,7 @@ class ATX_heading(Block):
         super().__init__(parent)
         self.level = level
 
-    def can_continue(self) -> bool:
+    def can_continue(self, peek=False) -> bool:
         if self.open:
             self.open = False
             return True
@@ -325,7 +328,7 @@ class Setext_heading(Block):
         new = Setext_heading(b,c)
         return new
 
-    def can_continue(self) -> bool:
+    def can_continue(self, peek=False) -> bool:
         if self.open:
             self.open = False
             return True
@@ -347,7 +350,7 @@ class Thematic_break(Block):
 
         super().__init__(parent)
 
-    def can_continue(self) -> int:
+    def can_continue(self, peek=False) -> int:
         if self.open:
             self.open = False
             return True
@@ -437,13 +440,18 @@ class List_Block(Block):
         m = dot + aft
         return (my_m == m) and my_space in space # at least as long
     
-    def can_continue(self) -> bool:
+    def can_continue(self, peek=False) -> bool:
         '''If next line can continue as list item, or is new list item, then we can continue.
         '''
         # if a new item can be made (of same marker), or an item can continue, then it's fine,
         # and blank lines can also continue
-        # blank lines indicate looseness, (as long as something is added after?)
-        if Block.current_line.strip() == '': self.maybe_loose = True
+        # blank lines between items indicate looseness
+        if Block.current_line.strip() == '' and  \
+            (not self.open_child is None) and \
+            ((not self.open_child.open) or (not self.open_child.can_continue(peek=True))): # type:ignore
+                self.maybe_loose = True # blank line and closed child.
+        else:
+            self.maybe_loose = False
 
         if m:= List_item.can_interrupt(self,peek=True): # new item
             if self.marker_belongs(m): return True
@@ -503,8 +511,9 @@ class List_item(Block):
         super().__init__(parent)
         self.marker = marker
         self.startline = True
+        self.maybe_loose = False
 
-        # fix parent loosness:
+        # is parent maybe loose, it's loose now:
         if (not parent is None) and parent.maybe_loose:
             parent.loose = True
 
@@ -523,13 +532,27 @@ class List_item(Block):
         if not peek and self.twoline and Block.current_line.strip() == '':
             self.open = False
             return False # can't have two empty lines
+        #TODO: go here
+        # looseness occurs when we have empty line between two blocks.
+        if Block.current_line.strip()=='' and \
+            (not self.open_child is None) and \
+            ((not self.open_child.open) or (not self.open_child.can_continue(peek=True))): # type:ignore
+                # needs can-continue check here?
+                
+                self.maybe_loose = True # blank line and closed child.
+                self.lazy = False
+                return True # empty lines can continue
+
+        elif self.maybe_loose and (not Block.current_line.strip() == ''): # if we are maybe loose but there's a non-empty line, then we are loose
+            self.parent.loose = True # type:ignore
+        else:
+            self.maybe_loose = False
+
+        # oterwise empty lines are fine:
+        if Block.current_line.strip() == '': 
+            return True
         
-        if Block.current_line.strip()=='': # type:ignore 
-            self.parent.maybe_loose = True #type:ignore
-            self.lazy = False
-            return True # empty lines can continue
-
-
+    
         # expand tabs and get number of spaces:
         l =Block.current_line.replace('\t', '    ')
         n_space = len(l) - len(l.lstrip(' '))
@@ -537,8 +560,6 @@ class List_item(Block):
         if n_space >= req_space:
             # clean up marker:
             if not peek: Block.current_line = l[req_space:]
-            # check looseness:
-            if self.parent.maybe_loose: self.parent.loose = True # type:ignore
             self.lazy = False
             return True
         # else: we're maybe lazy
@@ -611,8 +632,10 @@ class List_item(Block):
             mkr = ' '* ind + m[0] + ' ' * n_spaces
             
             # extra check, since only '1.' is allowed to interrupt paragraphs
+            # exept if lazy continuation line (then it's a new list item)
             if isinstance(b, Paragraph) and m[0].lstrip()[:2] not in ('1)', '1.'):
-                return None
+                if not b.parent.lazy:
+                    return None
 
 
             if not peek: 
@@ -680,7 +703,7 @@ class Block_quote(Block):
         return new
         
     
-    def can_continue(self) -> bool:
+    def can_continue(self, peek=False) -> bool:
         '''if we have caret then remove it and continue, else it is lazy,
         '''
         
@@ -757,7 +780,7 @@ class Fenced_code_block(Block):
         return new
 
 
-    def can_continue(self) -> bool:
+    def can_continue(self, peek=False) -> bool:
         '''continues as long as we don't see the breaking line,
         break at least as long as start (can be longer)'''
         if not self.open: return False
@@ -769,7 +792,8 @@ class Fenced_code_block(Block):
         if l.replace(self.delimiter[0],'') != '': return True # something else there
 
         if self.delimiter in l: # at least as long
-            Block.current_line = "" # Get rid of it from the end result
+            if not peek:
+                Block.current_line = "" # Get rid of it from the end result
             self.open = False
             return False
         else: return True
@@ -791,12 +815,13 @@ class Fenced_code_block(Block):
 
 class Indented_code_block(Block):
 
-    def can_continue(self) -> bool:
+    def can_continue(self, peek=False) -> bool:
         '''if proper indent, we can continue, blank lines can also continue'''
 
         if Block.current_line.strip() == '':
             # up to 4 indents should be stripped
-            Block.current_line = Block.current_line.replace(' ', '', 4)
+            if not peek:
+                Block.current_line = Block.current_line.replace(' ', '', 4)
             return True
         
         elif self.can_interrupt(self, peek=True):
@@ -927,7 +952,7 @@ class HTML_block(Block):
         new = HTML_block(b,t)
         return new
     
-    def can_continue(self) -> bool:
+    def can_continue(self, peek=False) -> bool:
         '''7 different conditions, woah.
         If condition found add rest of line verbatim'''
         if not self.open: return False # already closed
@@ -986,7 +1011,7 @@ class Link_reference(Block):
         self.evaluated = False
         super().__init__(parent, contents)
 
-    def can_continue(self) -> int:
+    def can_continue(self, peek=False) -> int:
 
         if self.startline: # to ensure it can continue on the first line
             self.startline = False
@@ -1158,7 +1183,7 @@ class Link_reference(Block):
 
 class Paragraph(Block):
     
-    def can_continue(self) -> bool:
+    def can_continue(self, peek= False) -> bool:
         if not self.open: return False
         if not Block.current_line.strip() == "": return True
         self.open = False # can't have whitespace
