@@ -331,6 +331,22 @@ def parse_inline_emphasis(stream:fakestream, out:list[str], c:str)->str|bool:
         d +=1
         lor = True
 
+    # special `_` check:
+    if c == '_' and lor and d == 0:
+        # if it is potentially both, extra conditions apply:
+        # for left, need punctuation before,
+        # for right, need punctuation after.
+        if pre_p and fol_p:
+            pass # d remains 0 can both open and close
+        elif fol_p:
+            d = 1 # not open, can close
+        elif pre_p:
+            d = -1 # not close, can open
+        else:
+            lor = False # can't open or close, just literal
+
+
+
     if lor: # add to stack
         delimeter_stack.append({
             "type": c,
@@ -556,38 +572,53 @@ def process_emphasis(out:list[str], stack_bottom:int = -1):
 
     while curr_pos < len(delimeter_stack):
         # get next closer:
-        curr = delimeter_stack[curr_pos]
-        if curr['dir'] < 0 or (not curr['type'] in ('*','_')):
+        closer = delimeter_stack[curr_pos]
+        if closer['dir'] < 0 or (not closer['type'] in ('*','_')):
             curr_pos += 1
             continue
 
         # look back for first matching, staying above bottom:
-        for i in range(curr_pos- max(stack_bottom, openers_bottom[curr['type']])):
-            pot = delimeter_stack[curr_pos-i] # potential opener
-            if not (pot['type'] == curr['type'] and pot['dir']<=0 and pot != curr):
+        for i in range(curr_pos- max(stack_bottom, openers_bottom[closer['type']])):
+            opener = delimeter_stack[curr_pos-i] # potential opener
+            if not (opener['type'] == closer['type'] and opener['dir']<=0 and opener != closer):
                 continue # doesn't match
             # found valid one
-            is_strong = len(out[curr['idx']]) >=2 and len(out[pot['idx']]) >=2
+
+            # three check:
+            ''' "If one of the delimiters can both open and close emphasis, 
+            then the sum of the lengths of the delimiter runs containing the opening 
+            and closing delimiters must not be a multiple of 3 
+            unless both lengths are multiples of 3." '''
+            if opener['dir'] == 0 or closer['dir'] == 0:
+                if opener['length'] % 3 == 0 and closer['length'] % 3 == 0:
+                    pass # fine
+                elif (opener['length'] + closer['length']) % 3 == 0:
+                    # bad, no match
+                    continue
+                    
+
+
+            is_strong = len(out[closer['idx']]) >=2 and len(out[opener['idx']]) >=2
             
             # add emphasis or strong to nodes between delimeters:
             if is_strong:
-                out[pot['idx']+1] = '<strong>' + out[pot['idx']+1]
-                out[curr['idx']-1] += '</strong>'
+                out[opener['idx']+1] = '<strong>' + out[opener['idx']+1]
+                out[closer['idx']-1] += '</strong>'
 
                 # remove delimeters from delimeter run:
-                curr['length'] -= 2
-                out[curr['idx']] = curr['type']*curr['length']
-                pot['length'] -= 2
-                out[pot['idx']] = pot['type']*pot['length']
+                closer['length'] -= 2
+                out[closer['idx']] = closer['type']*closer['length']
+                opener['length'] -= 2
+                out[opener['idx']] = opener['type']*opener['length']
             else:
-                out[pot['idx']+1] = '<em>' + out[pot['idx']+1]
-                out[curr['idx']-1] += '</em>'
+                out[opener['idx']+1] = '<em>' + out[opener['idx']+1]
+                out[closer['idx']-1] += '</em>'
 
                 # remove delimeters from delimeter run:
-                curr['length'] -= 1
-                out[curr['idx']] = curr['type']*curr['length']
-                pot['length'] -= 1
-                out[pot['idx']] = pot['type']*pot['length']
+                closer['length'] -= 1
+                out[closer['idx']] = closer['type']*closer['length']
+                opener['length'] -= 1
+                out[opener['idx']] = opener['type']*opener['length']
 
             # remove all delimiters between opener and closer:
             for j in range(curr_pos-1, curr_pos-i, -1):
@@ -595,19 +626,19 @@ def process_emphasis(out:list[str], stack_bottom:int = -1):
                 curr_pos-=1 # to keep it accurate
 
             # remove delimeters if they're empty:
-            if pot['length'] == 0:
-                delimeter_stack.remove(pot)
+            if opener['length'] == 0:
+                delimeter_stack.remove(opener)
                 curr_pos -=1
-            if curr['length'] == 0:
-                delimeter_stack.remove(curr)
+            if closer['length'] == 0:
+                delimeter_stack.remove(closer)
                 # move to next, which automatically happens with curr_pos
             break
         else: # none found
-            openers_bottom[curr['type']] = curr_pos -1 # lower bound in future
-            if curr['dir'] != 0:
+            openers_bottom[closer['type']] = curr_pos -1 # lower bound in future
+            if closer['dir'] != 0:
                 # not opener either, remove it
                 # (which advances curr_pos)
-                delimeter_stack.remove(curr)
+                delimeter_stack.remove(closer)
             else:
                 curr_pos += 1
 
