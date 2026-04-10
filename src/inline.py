@@ -439,8 +439,8 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
                     while (c := stream.read(1)) != '>':
                         buf.append(c)
                         if c == '\\': buf.append(stream.read(1))
-                        if c == '':
-                            # EOF, invalid
+                        if c in ('','\n'):
+                            # EOF or EOL, invalid
                             stream.move(-len(buf))
                             delimeter_stack.remove(delim)
                             return ']'
@@ -454,10 +454,12 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
                         count = -1
                         c = ')'
                     else:
+                        if buf[-1] == '\\': buf.append(stream.read(1))
                         while True:
                             c = stream.read(1)
                             buf.append(c)
                             if ord(c) <= 0x1F or c in ('\u007F', ' '):break
+                            if c == '\\': buf.append(stream.read(1))
                             if c == '(': count += 1
                             elif c == ')': count -=1
                             if count < 0: # end parenthesis
