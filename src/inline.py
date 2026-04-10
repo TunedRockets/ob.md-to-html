@@ -13,8 +13,8 @@ with open(Path(__file__).parent.joinpath("entities.json")) as file:
 
 
 
-delimeter_stack = []
-def inline_parse(text:str, link_references)->str:
+
+def inline_parse(text:str, link_references, nolinks=False)->str:
     '''runs the inline parse on the text, in order to (in order of precedence):
     - insert code spans
     - insert emphasis
@@ -28,8 +28,7 @@ def inline_parse(text:str, link_references)->str:
 
     Version 2
     '''
-    global delimeter_stack
-    delimeter_stack = [] # reset stack
+    delimeter_stack = [] # set up stack
 
     out = [""] # improvement over v1, out is a list of strings
     # better this than a linked list and allows some pointer-like things
@@ -41,13 +40,13 @@ def inline_parse(text:str, link_references)->str:
             out.extend([t, '']) # type:ignore
             continue
         
-        if (t := parse_inline_emphasis(stream,out,c)):
+        if (t := parse_inline_emphasis(stream,out,c, delimeter_stack)):
             out.extend([t, '']) # type:ignore
             continue
         
         
 
-        if (t := parse_inline_links(stream,out,c, link_references)):
+        if (not nolinks) and (t := parse_inline_links(stream,out,c, link_references, delimeter_stack)):
             if isinstance(t, list): out = t
             else: out.extend([t, '']) # type:ignore
             continue
@@ -74,7 +73,7 @@ def inline_parse(text:str, link_references)->str:
         # else:
         out[-1] += replace_danger(c) # check for danger
 
-    process_emphasis(out, -1)
+    process_emphasis(out,delimeter_stack, -1)
     # remove end breaks:
     if out[-1][-7:] == "<br />\n": out[-1] = out[-1][:-7]
     # strip end spaces:
@@ -294,10 +293,9 @@ def parse_inline_char_ref(stream:fakestream, c:str):
 
 
 
-def parse_inline_emphasis(stream:fakestream, out:list[str], c:str)->str|bool:
+def parse_inline_emphasis(stream:fakestream, out:list[str], c:str, delimeter_stack:list[dict])->str|bool:
     '''read character, if it starts emphasis, return an emphasis string
     and add to delimiter stack'''
-    global delimeter_stack
 
     
     if not c in ('*','_'): return False
@@ -311,7 +309,9 @@ def parse_inline_emphasis(stream:fakestream, out:list[str], c:str)->str|bool:
     lor = False
     fol = stream.read(1)
     stream.move(-1) # go back to not miss
-    pre = out[-1][-1] if len(out[-1]) != 0 else ''
+    
+    # get previous 
+    pre = get_prev(out)
     # unicode category (since uni doesn't like none inputs):
     fol_c = uni.category(fol) if not fol == '' else '  '
     pre_c = uni.category(pre) if not pre == '' else '  '
@@ -360,12 +360,11 @@ def parse_inline_emphasis(stream:fakestream, out:list[str], c:str)->str|bool:
     return c * n
 
 
-def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)->str|bool|list[str]:
+def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, delimeter_stack:list[dict])->str|bool|list[str]:
     '''read character, if it starts link, return a link string
     and add to delimiter stack, if it ends link make link'''
     if not c in ('[','!', ']'): return False
     # this one's a doosey
-    global delimeter_stack
 
     
     # check for `![`:
@@ -534,9 +533,37 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)-
         dest = URI_sanitize(dest)
 
 
-        # add to out and clear it:
-        out = out[:delim['idx']]
+        
+
+
+        # contents should be parsed as inline, and 
+        # delimeters contained within should be removed.
+        # (note that this recreates some things but oh well)
+
         image = (delim['type'] == '![')
+        delim_idx = delimeter_stack.index(delim)
+
+       
+
+        # do inline parse, but links only if image
+        content = inline_parse(content,link_references, nolinks=(not image))
+
+        # remove delimeters inside (and starting delimeter):
+        for item in delimeter_stack[delim_idx:]:
+            delimeter_stack.remove(item) # needed to modify the reference
+
+        # inactivate links if not image:
+        if not image:
+            for d in delimeter_stack:
+                d['active'] = False
+
+
+        # remove nodes from out:
+        out = out[:delim['idx']]
+
+
+       
+        # add link to out:
         if image: # image
             out.append(f'<img src="{dest}"' + f' alt="{content}"'+ 
                 (f' title="{title}"' if title != '' else '') + 
@@ -546,17 +573,6 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)-
                 (f' title="{title}"' if title != '' else '') + 
                 f'>{content}</a>')
 
-        # process emphasis on inside:
-        delim_idx = delimeter_stack.index(delim)
-        process_emphasis(out,delim_idx)
-
-        # remove delimeter:
-        delimeter_stack.remove(delim)
-
-        # inactivate links if not image:
-        if not image:
-            for d in delimeter_stack[:delim_idx]:
-                d['active'] = False
 
         return out # sign that we succeeded for inline parser
 
@@ -564,11 +580,14 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references)-
     else: # found none, insert literal:
         return c
 
-def process_emphasis(out:list[str], stack_bottom:int = -1):
+def process_emphasis(out:list[str], delimeter_stack:list[dict], stack_bottom:int = -1):
     '''Run process emphasis, until we reach indicated stack bottom'''
     curr_pos = stack_bottom+1
-    openers_bottom = {'*' : stack_bottom, '_' : stack_bottom}
-    global delimeter_stack
+    openers_bottom = {'*' : stack_bottom, '_' : stack_bottom,
+                      '**': stack_bottom, '__': stack_bottom,
+                      '***':stack_bottom, '___':stack_bottom,
+                      '':stack_bottom} # this correct?
+
 
     while curr_pos < len(delimeter_stack):
         # get next closer:
@@ -578,7 +597,7 @@ def process_emphasis(out:list[str], stack_bottom:int = -1):
             continue
 
         # look back for first matching, staying above bottom:
-        for i in range(curr_pos- max(stack_bottom, openers_bottom[closer['type']])):
+        for i in range(curr_pos- max(stack_bottom, openers_bottom[closer['type']*(closer['length']%3)])):
             opener = delimeter_stack[curr_pos-i] # potential opener
             if not (opener['type'] == closer['type'] and opener['dir']<=0 and opener != closer):
                 continue # doesn't match
@@ -634,7 +653,7 @@ def process_emphasis(out:list[str], stack_bottom:int = -1):
                 # move to next, which automatically happens with curr_pos
             break
         else: # none found
-            openers_bottom[closer['type']] = curr_pos -1 # lower bound in future
+            openers_bottom[closer['type']*(closer['length']%3)] = curr_pos -1 # lower bound in future
             if closer['dir'] != 0:
                 # not opener either, remove it
                 # (which advances curr_pos)
@@ -645,7 +664,8 @@ def process_emphasis(out:list[str], stack_bottom:int = -1):
             continue
 
     # remove delimeters above stack bottom TODO
-    delimeter_stack = delimeter_stack[:stack_bottom+1]
+    for item in delimeter_stack[stack_bottom+1:]:
+        delimeter_stack.remove(item) # needed to edit the reference
     return;
 
 def char_counter(s:fakestream, c:str)->int:
@@ -655,3 +675,9 @@ def char_counter(s:fakestream, c:str)->int:
         tick_len += 1
     s.move(-1) # go back one
     return tick_len
+
+def get_prev(out:list[str])->str:
+    '''get last char of out or '' if none exists'''
+    for block in out[::-1]:
+        if len(block)>0: return block[-1]
+    return ''
