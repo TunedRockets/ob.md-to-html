@@ -399,7 +399,6 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
 
         # check if inline, reference, collapsed, or shortcut
         buf = [stream.read(1)]
-        may_invalid = False
         match buf[0]:
 
             case '[':
@@ -430,10 +429,16 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
                 # inline, next part is optional link destination and optional link title, followed by `)`
                 label = ''
                 content = link_content
-                # bracketed destination?
-                buf.append(stream.read(1))
+
+                #eat whitespace:
+                while (c:=stream.read(1)).strip() == '':
+                        if c == '': break # EOF
+                        buf.append(c)
+                buf.append(c)
                 count = 0 # needed for later
-                if buf[1] == '<':
+
+                # bracketed destination?
+                if buf[-1] == '<':
                     # bracketed destination
                     # read until non-backspaced `>`
                     while (c := stream.read(1)) != '>':
@@ -446,7 +451,7 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
                             return ']'
                     buf.append(c) # put everything read in buffer
                     # end of dest:
-                    dest = "".join(buf[2:-1])
+                    dest = "".join(buf[2:-1]).lstrip()
                 else: # unbracketed, count parentheses
                     # edge case with empty link:
                     if buf[1] == ')':
@@ -464,7 +469,7 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
                             elif c == ')': count -=1
                             if count < 0: # end parenthesis
                                 break
-                        dest = ''.join(buf[1:-1])
+                        dest = ''.join(buf[1:-1]).lstrip()
                 # now it's title time, eat whitespace first (if count not negative):
                 if count >= 0:
                     while (c:=stream.read(1)).strip() == '':
@@ -506,7 +511,6 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
             case _:
                 # shortcut or invalid
                 stream.move(-1) # back up
-                may_invalid = True
                 label=link_content
                 content = link_content
                 title=""
@@ -520,17 +524,16 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
                     dest = l['dest']
                     break
             else:
-                if may_invalid:
-                    # invalid shortcut
-                    stream.move(-len(buf)+1)
-                    delimeter_stack.remove(delim)
-                    return ']'
+                # no matching link reference, i.e. invalid reference
+                stream.move(-len(buf)+1)
+                delimeter_stack.remove(delim)
+                return ']'
 
         # have valid, close out
         
         # check title and destination for escapes, and sanitize
         title = sanitize_text(title)
-        dest = sanitize_text(dest)
+        dest = sanitize_text(dest, replace_dangerous=False)
         # more sanitizing for URI specifically:
         dest = URI_sanitize(dest)
 
@@ -545,10 +548,13 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
         image = (delim['type'] == '![')
         delim_idx = delimeter_stack.index(delim)
 
-       
+        # if image, extract links if inside:
+        if image:
+            content = extract_links(content)
 
-        # do inline parse, but links only if image
-        content = inline_parse(content,link_references, nolinks=(not image))
+
+        # do inline parse, but don't look for links (handled above)
+        content = inline_parse(content,link_references, nolinks=True)
 
         # remove delimeters inside (and starting delimeter):
         for item in delimeter_stack[delim_idx:]:
@@ -557,7 +563,7 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
         # inactivate links if not image:
         if not image:
             for d in delimeter_stack:
-                d['active'] = False
+                if d['type'] == '[': d['active'] = False
 
 
         # remove nodes from out:
@@ -683,3 +689,25 @@ def get_prev(out:list[str])->str:
     for block in out[::-1]:
         if len(block)>0: return block[-1]
     return ''
+
+
+LINK_DFN = r'<a .+</a>'
+IMG_DFN = r'<img .+ />'
+def extract_links(s:str)->str:
+    '''finds any link or image HTML definitions and replaces them
+    with their contents'''
+
+
+    while (m:=re.search(LINK_DFN, s)):
+        # find the contents of the link:
+        content = re.search(r'>(.+)</a>$',m[0])
+        content = content[1] if not content is None else ''
+        s = s.replace(m[0], content)
+
+    while (m:=re.search(IMG_DFN, s)):
+        # find the contents of the link:
+        content = re.search(r'alt="(.+)" />$',m[0])
+        content = content[1] if not content is None else ''
+        s = s.replace(m[0], content)
+
+    return s

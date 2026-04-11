@@ -125,16 +125,19 @@ def is_HTML_tag_name(name:str)->bool:
 URI_VALID = '[a-zA-Z0-9!#$&\'()*+,/:;=?@._~-]' # HTML sanitizing takes priority, so those are allowed through
 # trial and error on which reserved characters are allowed...
 def URI_sanitize(link:str):
-    '''superset of HTML sanitize that also replaces non-allowed characters with % replacements'''
+    '''superset of HTML sanitize that also replaces non-allowed characters with % replacements,
+    any already existing % are kept'''
     out = []
-    for c in link:
+    for idx, c in enumerate(link):
         if re.fullmatch(URI_VALID,c): out.append(replace_danger(c))
+        elif c == '%' and len(link)>idx+2:
+            # might be existing code, keep if followed by at least 2 digits
+            if re.match('[0-9]{2}',link[idx+1]+link[idx+2]): out.append('%')
         else:
             # split up in UTF-8 bytes, each byte encoded in hex after a percent
             for b in c.encode():
                 out.append(f'%{b:X}')
     return "".join(out)
-
 
 
 HTML_REF_WORD = r'(^|[^\\])(\\\\)*(&[a-zA-Z0-9]+;)' # TODO: ensure '([^\\]|^)' works 
@@ -263,9 +266,6 @@ def valid_label_name(name:str):
 
 def label_collapse(label:str)->str:
     '''perform operations to collapse label in reference links'''
-
-    label = sanitize_text(label, True,False,False) # not technically correct,
-    # but the way the system works this is easier, and the false positives should be minimal
 
     label = label.casefold().strip().replace('\t',' ').replace('\n',' ')
     label = " ".join(label.split())
