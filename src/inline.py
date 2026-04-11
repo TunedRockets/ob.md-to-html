@@ -63,7 +63,7 @@ def inline_parse(text:str, link_references, nolinks=False)->str:
             # we keep the escape, but put it in new block if we want to remove it later
             # if it's invalid it is returned as '\[char]' else the char itself,
             # so we check for that, make new if valid
-            if re.match(r'\\.*',t) and t[1] not in ESCAPABLE_CHARS: out[-1] += t #type:ignore
+            if re.match(r'\\.+',t) and t[1] not in ESCAPABLE_CHARS: out[-1] += t #type:ignore
             else: out.extend([t,""]) # type:ignore
             continue
 
@@ -219,6 +219,9 @@ def parse_inline_autolink(stream:fakestream, c:str):
     if link == '': # Hit EOF, invalid
         return False
     link = link[:-1] # strip `>`
+    if re.search(r'\s', link): # no whitespace
+        stream.move(-len(link)-1) # for the strip
+        return False
     # else check for valid link or email:
     if valid_URI_link(link):
         return f'<a href="{URI_sanitize(link)}">{replace_danger(link)}</a>'
@@ -411,6 +414,7 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
         
 
         link_content = "".join(out[delim['idx']:])[len(delim['type']):]
+        
 
         # check if inline, reference, collapsed, or shortcut
         buf = [stream.read(1)]
@@ -442,6 +446,8 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
                     dest = ''
             case '(':
                 # inline, next part is optional link destination and optional link title, followed by `)`
+
+                
                 label = ''
                 content = link_content
 
@@ -525,11 +531,17 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
                 
             case _:
                 # shortcut or invalid
-                stream.move(-1) # back up
+                buf.pop()
+                stream.move(-1) # move back and reset buffer
                 label=link_content
                 content = link_content
                 title=""
                 dest=""
+
+                # empty?
+                if label == '':
+                    delimeter_stack.remove(delim)
+                    return ']'
         
         # fill in if label
         if label != '':
@@ -540,7 +552,7 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
                     break
             else:
                 # no matching link reference, i.e. invalid reference
-                stream.move(-len(buf)+1)
+                stream.move(-len(buf))
                 delimeter_stack.remove(delim)
                 return ']'
 
@@ -570,6 +582,10 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
 
         # do inline parse, but don't look for links (handled above)
         content = inline_parse(content,link_references, nolinks=True)
+
+        # actually, if an image, content should be plain string, so all tags should be removed:
+        if image:
+            content = remove_tags(content)
 
         # remove delimeters inside (and starting delimeter):
         for item in delimeter_stack[delim_idx:]:
@@ -725,3 +741,13 @@ def extract_links(s:str)->str:
         s = s.replace(m[0], content)
 
     return s
+
+TAG_DFN = r'<.+?>'
+def remove_tags(s:str)->str:
+    '''Removes all HTML tags, returning a plaintext representation of s'''
+
+    while (m:=re.search(TAG_DFN, s)):
+        s = s.replace(m[0], '')
+    return s
+
+

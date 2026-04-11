@@ -32,7 +32,7 @@ def is_HTML_tag(tag:str)->bool:
         tag = tag[:-1]
 
     # start with line beginning:
-    sp = tag.split(' ')
+    sp = tag.split()
     name = sp[0]
     if name[0] != '<': return False
     if len(name) < 2: return False
@@ -199,7 +199,8 @@ def valid_URI_link(link:str):
     starting with ASCII letter and followed by ASCII,digits, or `+`, `.`, or `-`
     followed by a colon `:`, followed by zero or more characters, not including ASCII control
     characters, space, `<` or `>`'''
-    scheme,_,rest = link.partition(':')
+    scheme,colon,rest = link.partition(':')
+    if colon == '': return False # no colon
     if not re.fullmatch(SCHEME_PATTERN, scheme): return False
     if re.match(URI_NOMATCH,rest): return False
     return True
@@ -228,7 +229,7 @@ def valid_destination_link(link:str, allow_incomplete:bool=True):
         if count < 0: return False
     return True
 
-EMAIL_SPEC = r"/^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/"
+EMAIL_SPEC = r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
 def valid_email(email:str):
     '''valid email is anything that matches the "non-normative regex from the HTML5 spec"'''
     if re.fullmatch(EMAIL_SPEC,email): return True
@@ -256,12 +257,13 @@ def valid_link_title(title:str)->bool:
 UNESCAPED_PAR = UNESCAPED_START + r'\)'
 UNESCAPED_ANG_BRACE = UNESCAPED_START + r'>'
 UNESCAPED_BRACE = UNESCAPED_START + r']'
+UNESCAPED_BRACES = UNESCAPED_START + r'[\[\]]'
 def valid_label_name(name:str):
     '''checks if label name is valid, bust have at least one non-whitespace character
     and must not have any unescaped `]`, and a max of 999 chars long, name assumed to be sanitized of opening and closing brackets'''
     if len(name) > 999: return False
     if len(name.strip()) == 0: return False
-    if re.search(UNESCAPED_BRACE, name): return False # looking for unescaped `]`
+    if re.search(UNESCAPED_BRACES, name): return False # looking for unescaped `]` or `[`
     return True
 
 def label_collapse(label:str)->str:
