@@ -60,7 +60,11 @@ def inline_parse(text:str, link_references, nolinks=False)->str:
             continue
 
         if (t := parse_inline_escape(stream,c)):
-            out[-1] += t # type:ignore
+            # we keep the escape, but put it in new block if we want to remove it later
+            # if it's invalid it is returned as '\[char]' else the char itself,
+            # so we check for that, make new if valid
+            if re.match(r'\\.*',t) and t[1] not in ESCAPABLE_CHARS: out[-1] += t #type:ignore
+            else: out.extend([t,""]) # type:ignore
             continue
 
         if parse_inline_linebreak(stream, out,c):
@@ -79,7 +83,11 @@ def inline_parse(text:str, link_references, nolinks=False)->str:
     # strip end spaces:
     out[-1] = out[-1].rstrip()
 
-    return ''.join(out)
+    # strip valid escape sequences:
+    for i in range(len(out)):
+        if re.match(r'\\.',out[i]) and out[i][1] in ESCAPABLE_CHARS: out[i] = out[i][1:] 
+
+    return ''.join(out).rstrip('\n')
 
 class fakestream:
     '''stream-like interface for a string, to enable character by character parsing'''
@@ -226,9 +234,12 @@ def parse_inline_linebreak(stream:fakestream, out:list[str], c:str)->bool:
     if c != '\n': return False
 
 
-    # two+ spaces (or backslash, which is handles in escapes) hard break
+    prev = get_prev(out,2)
+
+
+    # two+ spaces (or tab) => hard break
     # else soft break
-    if (len(out[-1])>=2 and out[-1][-2:] == '  ') or (len(out[-1])>=1 and out[-1][-1] == '\t'):
+    if (prev == '  ') or (len(prev) > 1 and prev[1] == '\t'):
         # hard:
         # if we're at EOF then no hard break:
         if stream.read(1) == '':
@@ -245,27 +256,31 @@ def parse_inline_linebreak(stream:fakestream, out:list[str], c:str)->bool:
     stream.move(-1) # move back to read new line
     return True
 
+ESCAPABLE_CHARS = ('!', '"', '#', '$', '%', '&', "'", '(', ')', '*', '+', ',', '-', '.', '/', ':', ';', '<', '=', '>', '?', '@', '[', '\\', ']', '^', '_', '`', '{', '|', '}', '~')
 def parse_inline_escape(stream:fakestream, c:str)->str|bool:
     '''reads for escape sequences if found, returns literal character.
     also deals with dangerous HTML characters'''
     if c != '\\': return False
     c = stream.read(1) # get potential escaping character
-    if not c in ('!', '"', '#', '$', '%', '&', "'", '(', ')', '*', '+', ',', '-', '.', '/', ':', ';', '<', '=', '>', '?', '@', '[', '\\', ']', '^', '_', '`', '{', '|', '}', '~', '\n'):
-        # not valid escape, treat as literal
-        # since it can't be beginning something special just pass on literal:
-        return '\\' + c
-    # else:
+
     if c == '\n':
-        # special case, back up and add two spaces for the inline break
+        # special case, add break
 
         # except if at EOF, in which case keep the `\`:
         if stream.read(1) == '':
-            return '\\'
+            return '\\\n'
         else:
-            stream.move(-2) # for both forward reads
-            return '  '
-    else:
-        return replace_danger(c)
+            # add a line break 
+            stream.move(-1)
+            return '<br />\n'
+
+    elif not c in ESCAPABLE_CHARS:
+        # not valid escape, treat as literal
+        # since it can't be beginning something special just pass on literal:
+        return '\\' + c
+    
+    else: # valid escape, pass it on
+        return '\\'+ replace_danger(c)
     
 def parse_inline_char_ref(stream:fakestream, c:str):
     '''checks if the following is a valid HTML character unicode referece.
@@ -684,11 +699,10 @@ def char_counter(s:fakestream, c:str)->int:
     s.move(-1) # go back one
     return tick_len
 
-def get_prev(out:list[str])->str:
-    '''get last char of out or '' if none exists'''
-    for block in out[::-1]:
-        if len(block)>0: return block[-1]
-    return ''
+def get_prev(out:list[str], n:int =1)->str:
+    '''get last n chars of out or '' if none exists'''
+    s = ''.join(out)
+    return s[-n:] if len(s)>=n else ''
 
 
 LINK_DFN = r'<a .+</a>'
