@@ -285,6 +285,8 @@ def parse_inline_escape(stream:fakestream, c:str)->str|bool:
         else:
             # add a line break 
             stream.move(-1)
+            while (c := stream.read(1)) == ' ': pass # eat whitespace
+            stream.move(-1)
             return '<br />\n'
 
     elif not c in ESCAPABLE_CHARS:
@@ -394,11 +396,9 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
     if not c in ('[','!', ']'): return False
     # this one's a doosey
 
-    
     # check for `![`:
     if stream.read(1) == '[' and c == '!':
         c = '!['
-        
     else:
         stream.move(-1)
     
@@ -424,159 +424,154 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
         
 
         link_content = "".join(out[delim['idx']:])[len(delim['type']):]
+        # value inside brackets
         
 
         # check if inline, reference, collapsed, or shortcut
+        # if it is we define content and (label or title/dest)
+        content = ''; label = ''; title = ''; dest = '' # zero out label, content, title, & dest
+        linktype = 'none'
         buf = [stream.read(1)]
-        match buf[0]:
+        for _ in [1]: # for control flow, so we can break out
+            match buf[0]:
 
-            case '[':
-                # ref or collapsed
-                buf.append(stream.read(1))
-                if buf[1] == ']': # collapsed
-                    label = link_content
-                    content = link_content
-                    title = '' # let label fill out
-                    dest = ''
-                else:
-                    # ref, read in label
-                    while (c:=stream.read(1)) != ']':
-                        if c == '':
-                            # reached EOF, invalid link
-                            stream.move(-len(buf))
-                            delimeter_stack.remove(delim)
-                            return ']'
-                            
-                        buf.append(c)
-                        if c == '\\': buf.append(stream.read(1)) # disregard next from criteria
-                    label = "".join(buf[1:])
-                    buf.append(']') # so everything we read is in a buffer
-                    content = link_content
-                    title = ''
-                    dest = ''
-            case '(':
-                # inline, next part is optional link destination and optional link title, followed by `)`
-
-                
-                label = ''
-                content = link_content
-
-                #eat whitespace:
-                while (c:=stream.read(1)).strip() == '':
-                        if c == '': break # EOF
-                        buf.append(c)
-                buf.append(c)
-                count = 0 # needed for later
-
-                # bracketed destination?
-                if buf[-1] == '<':
-                    # bracketed destination
-                    # read until non-backspaced `>`
-                    while (c := stream.read(1)) != '>':
-                        buf.append(c)
-                        if c == '\\': buf.append(stream.read(1))
-                        if c in ('','\n'):
-                            # EOF or EOL, invalid
-                            stream.move(-len(buf))
-                            delimeter_stack.remove(delim)
-                            return ']'
-                    buf.append(c) # put everything read in buffer
-                    # end of dest:
-                    dest = "".join(buf[2:-1]).lstrip()
-                else: # unbracketed, count parentheses
-                    # edge case with empty link:
-                    if buf[1] == ')':
+                case '[':
+                    # ref or collapsed
+                    buf.append(stream.read(1))
+                    if buf[1] == ']': # collapsed
+                        label = link_content
+                        content = link_content
+                        title = '' # let label fill out
                         dest = ''
-                        count = -1
-                        c = ')'
+                        linktype='collapsed'
                     else:
-                        if buf[-1] == '\\': buf.append(stream.read(1))
-                        while True:
-                            c = stream.read(1)
+                        # ref, read in label
+                        while (c:=stream.read(1)) != ']':
+                            if c == '': break                            
                             buf.append(c)
-                            if ord(c) <= 0x1F or c in ('\u007F', ' '):break
-                            if c == '\\': buf.append(stream.read(1))
-                            if c == '(': count += 1
-                            elif c == ')': count -=1
-                            if count < 0: # end parenthesis
-                                break
-                        dest = ''.join(buf[1:-1]).lstrip()
-                # now it's title time, eat whitespace first (if count not negative):
-                if count >= 0:
-                    while (c:=stream.read(1)).strip() == '':
-                        if c == '': break # EOF
-                        buf.append(c)
-                    buf.append(c) # first part of ev. title
-                if c != ')': # check for title
-                    tit_start = len(buf) 
-                    match c:
-                        case '"': end = '"'
-                        case "'": end = "'"
-                        case '(': end = ')'
-                        case _:
-                            # invalid!
-                            stream.move(-len(buf))
-                            delimeter_stack.remove(delim)
-                            return ']'
-                            pass
-                    while (c := stream.read(1)) != end:
-                        buf.append(c)
-                        if c == '\\': buf.append(stream.read(1)) # ignore escaped chars
-                        if c == '':
-                            # EOF, invalid
-                            stream.move(-len(buf))
-                            delimeter_stack.remove(delim)
-                            return ']'
-                    buf.append(c)
-                    title = ''.join(buf[tit_start:-1])  
-                    # check for end parenthesis (and eat space):
-                    while (c:= stream.read(1)).strip() == "": buf.append(c)
-                    if c != ')':
-                        # invalid!
-                        stream.move(-len(buf)-1)
-                        delimeter_stack.remove(delim)
-                        return ']'
-                else: # no title
-                    title = ''
-                
-            case _:
-                # shortcut or invalid
-                buf.pop()
-                stream.move(-1) # move back and reset buffer
-                label=link_content
-                content = link_content
-                title=""
-                dest=""
+                            if c == '\\': buf.append(stream.read(1)) # disregard next from criteria
+                        label = "".join(buf[1:])
+                        buf.append(']') # so everything we read is in a buffer
+                        content = link_content
+                        title = ''
+                        dest = ''
+                        linktype='ref'
+                case '(':
+                    # inline, next part is optional link destination and optional link title, followed by `)`
 
-                # empty?
-                if label == '':
-                    delimeter_stack.remove(delim)
-                    return ']'
-        
+                    #eat whitespace:
+                    while (c:=stream.read(1)).strip() == '':
+                            if c == '': break # EOF
+                            buf.append(c)
+                    buf.append(c)
+                    count = 0 # needed for later
+
+                    # bracketed destination?
+                    if buf[-1] == '<':
+                        # bracketed destination
+                        # read until non-backspaced `>`
+                        dobreak = False
+                        while (c := stream.read(1)) != '>':
+                            buf.append(c)
+                            if c == '\\': buf.append(stream.read(1))
+                            if c in ('','\n'): 
+                                dobreak = True
+                                break # invalid, break out twice to escape the match
+                        if dobreak: break
+                        buf.append(c) # put everything read in buffer
+                        # end of dest:
+                        dest = "".join(buf[2:-1]).lstrip()
+                    else: # unbracketed, count parentheses
+                        # edge case with empty link:
+                        if buf[1] == ')':
+                            dest = ''
+                            count = -1
+                            c = ')'
+                        else:
+                            if buf[-1] == '\\': buf.append(stream.read(1))
+                            while True:
+                                c = stream.read(1)
+                                buf.append(c)
+                                if ord(c) <= 0x1F or c in ('\u007F', ' '):break
+                                if c == '\\': buf.append(stream.read(1))
+                                if c == '(': count += 1
+                                elif c == ')': count -=1
+                                if count < 0: # end parenthesis
+                                    break
+                            dest = ''.join(buf[1:-1]).lstrip()
+                    # now it's title time, eat whitespace first (if count not negative):
+                    if count >= 0:
+                        while (c:=stream.read(1)).strip() == '':
+                            if c == '': break # EOF
+                            buf.append(c)
+                        buf.append(c) # first part of ev. title
+                    if c != ')': # check for title
+                        tit_start = len(buf) 
+                        match c:
+                            case '"': end = '"'
+                            case "'": end = "'"
+                            case '(': end = ')'
+                            case _:
+                                break
+                        while (c := stream.read(1)) != end:
+                            buf.append(c)
+                            if c == '\\': buf.append(stream.read(1)) # ignore escaped chars
+                            if c == '': break # EOF-invalid
+                        buf.append(c)
+                        title = ''.join(buf[tit_start:-1])  
+                        # check for end parenthesis (and eat space):
+                        while (c:= stream.read(1)).strip() == "": buf.append(c)
+                        buf.append(c) # final read
+                        if c != ')': break # invalid 
+                            
+                    else: # no title
+                        title = ''
+
+                    # if we didn't break, it's a valid inline, so give it content:
+                    content = link_content
+                    linktype='inline'
+        # end match and for
+
+        # we now have either valid inline with no label, ref/collapsed with label & content, or shortcut (or invalid)
+
+        # now we have either:
+        # inline with no label, destination, and potential content & title
+        # reference with label, content
+        # collapsed with label, content
+        # shortcut without anything yet
+        # or invalid
+
+        if linktype=='none':
+            stream.move(-len(buf))
+            buf = [] # reset buf
+
+            # now link_content can be a potential shortcut:
+            label = link_content
+            content = link_content
+            
+
+
         # fill in if label
-        if label != '':
+        if linktype != 'inline':
             for l in link_references:
                 if label_collapse(label) == l['label']:
                     if l['title'] != '': title = l['title']
                     dest = l['dest']
-                    break
+                    break # matching found
             else:
                 # no matching link reference, i.e. invalid reference
                 stream.move(-len(buf))
                 delimeter_stack.remove(delim)
                 return ']'
 
-        # have valid, close out
+        #================ have valid, close out ====================
+        # have content, destination, and optional title
         
         # check title and destination for escapes, and sanitize
         title = sanitize_text(title)
         dest = sanitize_text(dest, replace_dangerous=False)
         # more sanitizing for URI specifically:
         dest = URI_sanitize(dest)
-
-
-        
-
 
         # contents should be parsed as inline, and 
         # delimeters contained within should be removed.
@@ -606,12 +601,9 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
             for d in delimeter_stack:
                 if d['type'] == '[': d['active'] = False
 
-
         # remove nodes from out:
         out = out[:delim['idx']]
 
-
-       
         # add link to out:
         if image: # image
             out.append(f'<img src="{dest}"' + f' alt="{content}"'+ 
@@ -622,12 +614,11 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
                 (f' title="{title}"' if title != '' else '') + 
                 f'>{content}</a>')
 
-
         return out # sign that we succeeded for inline parser
 
 
-    else: # found none, insert literal:
-        return c
+    # else: found none, insert literal:
+    return c
 
 def process_emphasis(out:list[str], delimeter_stack:list[dict], stack_bottom:int = -1):
     '''Run process emphasis, until we reach indicated stack bottom'''
