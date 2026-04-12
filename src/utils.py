@@ -9,11 +9,47 @@ with open(Path(__file__).parent.joinpath("entities.json")) as file:
     HTML_ENTITIES:dict = json.load(file)
 
 
+# huge regex for tag
+
+HTML_WHITE = r'(([ \t]+\n?[ \t]*)|([ \t]*\n?[ \t]+)|(\n))' # space, tab and up to one line ending (at least one)
+# A tag name consists of an ASCII letter followed by zero or more ASCII letters, digits, or hyphens (-).
+HTML_TAG_NAME = r'([a-zA-Z][a-zA-Z0-9-]*)'
+# An attribute name consists of an ASCII letter, _, or :, followed by zero or more ASCII letters, digits, _, ., :, or -.
+HTML_ATTR_NAME = r'([a-zA-Z_:][a-zA-Z0-9_\.:-]*)'
+# An unquoted attribute value is a nonempty string of characters not including spaces, tabs, line endings, ", ', =, <, >, or `.
+HTML_UNQUOT_VAL = r'([^ \t\n"\'=<>`]+)'
+# A single-quoted attribute value consists of ', zero or more characters not including ', and a final '.
+HTML_ONEQUOT_VAL = r"('[^']*')"
+# A double-quoted attribute value consists of ", zero or more characters not including ", and a final ".
+HTML_TWOQUOT_VAL = r'("[^"]*")'
+# An attribute value consists of an unquoted attribute value, a single-quoted attribute value, or a double-quoted attribute value.
+HTML_ATTR_VAL = f'({HTML_UNQUOT_VAL}|{HTML_ONEQUOT_VAL}|{HTML_TWOQUOT_VAL})'
+# An attribute value specification consists of optional spaces, tabs, and up to one line ending, 
+# a = character, optional spaces, tabs, and up to one line ending, and an attribute value.
+HTML_ATTR_VAL_SPEC = f'({HTML_WHITE}?={HTML_WHITE}?{HTML_ATTR_VAL})'
+# An attribute consists of spaces, tabs, and up to one line ending, an attribute name, and an optional attribute value specification.
+HTML_ATTR = f'({HTML_WHITE}{HTML_ATTR_NAME}{HTML_ATTR_VAL_SPEC}?)'
+
+# An open tag consists of a < character, a tag name, zero or more attributes, 
+# optional spaces, tabs, and up to one line ending, an optional / character, and a > character.
+HTML_OPEN_TAG = f'^<{HTML_TAG_NAME}{HTML_ATTR}*{HTML_WHITE}?/?>$'
+
+# A closing tag consists of the string </, a tag name, optional spaces, 
+# tabs, and up to one line ending, and the character >.
+HTML_CLOSING_TAG = f'^</{HTML_TAG_NAME}{HTML_WHITE}?>$'
+
+
+def is_HTML_tag(tag:str)->bool:
+    '''checks if tag is a valid HTML tag'''
+    if re.match(HTML_OPEN_TAG, tag): return True
+    elif re.match(HTML_CLOSING_TAG, tag): return True
+    else: return False
+
 
 ATTRIBUTE_START = r"[a-zA-Z_.:-]+"
 ATTRIBUTE_PATTERN = r"[a-zA-Z_:]"
 UVALUE_SET = ('"', "'", '=', '<', '>', '`')
-def is_HTML_tag(tag:str)->bool:
+def is_HTML_tag_old(tag:str)->bool:
     '''checks if a tag (with opening brackets) is a valid html tag.
     more properly, it checks that:
     - line begins with `<` or `</`

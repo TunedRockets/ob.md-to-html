@@ -112,17 +112,22 @@ class fakestream:
         '''moves index by given amount'''
         self.idx += pos
 
+    @property
+    def next(self): return self.content[self.idx]
+
 def eat_until(stream:fakestream, stop:str)->str:
     '''Will read from the stream until the specified string is reached
     then return everything up to and including the string.
     if string not found, will move back read to start'''
+    startidx = stream.idx
+
     buf = stream.read(len(stop))
     while buf[-len(stop):] != stop:
         if (c := stream.read(1)) != '':
             buf += c
         else:
             # reached eof, go back
-            stream.move(-len(buf)-2)
+            stream.idx = startidx
             return ''
     return buf
 
@@ -189,18 +194,23 @@ def parse_inline_HTML(stream:fakestream, c:str)->str|bool:
         stream.move(-8) # move back
 
     # regular tags:
-    buf = ''
-    while (c2 := stream.read(1)) != '>':
-        buf += c2
-        if c2 == '':
-            # reached EOF, so that's a false
+    buf = []
+    count = 1
+    while True:
+        c2 = stream.read(1)
+        buf.append(c2)
+        if c2 == '': # reached EOF, return fasle and reset
             stream.move(-len(buf))
             return False
+        if c2 == '<': count +=1
+        elif c2 == '>': count -= 1
+        if count <=0: break  
 
-    if is_HTML_tag('<' + buf + '>'):
-        return '<' + buf + '>'
+
+    if is_HTML_tag('<' + ''.join(buf)):
+        return '<' + ''.join(buf)
     else:
-        stream.move(-len(buf)-1)
+        stream.move(-len(buf))
         return False
 
 
