@@ -1,11 +1,12 @@
 
 
-def add(s:list):
-    s.pop()
-    s.append('p')
+high_strike = [False,False]
+
+def add(l:list[bool]):
+    l[0] = True
+    return
 
 
-
-l = ['a']
-add(l)
-print(l)
+print(high_strike)
+add(high_strike)
+print(high_strike)

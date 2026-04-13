@@ -5297,7 +5297,7 @@
   },
   {
     "markdown":"This will ~~~actually~~~ strike.\n",
-    "html": "<p>This will <del>actually</del> strike.</p>\n",
+    "html": "<p>This will <del>~actually</del>~ strike.</p>\n",
     "example": 1493,
     "section": "OB strikethrough"
   },
@@ -5322,7 +5322,7 @@
   },
   {
     "markdown":"This ===Will=== Highlight.\n",
-    "html": "<p>This <mark>Will</mark> Highlight.</p>\n",
+    "html": "<p>This <mark>=Will</mark>= Highlight.</p>\n",
     "example": 2003,
     "section": "OB Highlight"
   },

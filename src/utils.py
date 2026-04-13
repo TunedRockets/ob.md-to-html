@@ -326,6 +326,13 @@ def tab_shuffle(s:str)->str:
         ind = ind.replace('  \t', '\t  ') # shuffle tabs
     return ind + s[len(ind):]
 
+def replace_right(s:str, old:str, new:str)->str:
+    '''works like str.replace but does it from the right, (and maximum of one time)'''
+    front, p, back = s.rpartition(old)
+    if p == '': return s # old not found
+    else:
+        return front + new + back
+
 
 if __name__ == "__main__":
     teststr = 'f&ouml;&ouml;&lt;'

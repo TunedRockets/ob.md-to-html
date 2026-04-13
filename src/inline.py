@@ -33,6 +33,7 @@ def inline_parse(text:str, link_references, nolinks=False)->str:
     out = [""] # improvement over v1, out is a list of strings
     # better this than a linked list and allows some pointer-like things
     stream = fakestream(text.lstrip())
+    high_strike = [False, False] # for strike and highlight
     
     while (c := stream.read(1)) != '':
         
@@ -73,6 +74,10 @@ def inline_parse(text:str, link_references, nolinks=False)->str:
         if (t := parse_inline_char_ref(stream,c)):
             out[-1] += t # type:ignore
             continue
+
+        if (t := parse_high_and_strike(stream,c, high_strike)):
+            out[-1] += t # type: ignore
+            continue
         
         # else:
         out[-1] += replace_danger(c) # check for danger
@@ -87,7 +92,20 @@ def inline_parse(text:str, link_references, nolinks=False)->str:
     for i in range(len(out)):
         if re.match(r'\\.',out[i]) and out[i][1] in ESCAPABLE_CHARS: out[i] = out[i][1:] 
 
-    return ''.join(out).rstrip('\n')
+    # make into string:
+    out = ''.join(out).rstrip('\n')
+
+    # fix unfinished highlight/strikethrough
+    if high_strike[0]:
+        out = replace_right(out, '<mark>', '==')
+    if high_strike[1]:
+        out = replace_right(out, '<del>', '~~')
+    
+    # fix empty highlight/strikethrough:
+    out = out.replace('<mark></mark>', '====')
+    out = out.replace('<del></del>', '~~~~')
+
+    return out
 
 class fakestream:
     '''stream-like interface for a string, to enable character by character parsing'''
@@ -752,3 +770,35 @@ def remove_tags(s:str)->str:
     return s
 
 
+def parse_high_and_strike(stream:fakestream,c:str, high_strike:list[bool])->str|bool:
+    '''parse highlight and strikethrough,
+    a simple two icons turn it on, two more turn it off.
+    the high_strike list of bools says wether we are inside or outside a strikethrough.
+    
+    both can not be on at the same time. if on at the end the strike is completed (Not OB behaviour)'''
+    if not c in ('~','='): return False
+
+    if c == '=':
+        c2 = stream.read(1)
+        if c2 != c:
+            stream.move(-1)
+            return False
+        # else it's highlight
+        if not high_strike[0]:
+            high_strike[0] = True
+            return '<mark>'
+        else:
+            high_strike[0] = False
+            return '</mark>'
+    elif c == '~':
+        c2 = stream.read(1)
+        if c2 != c:
+            stream.move(-1)
+            return False
+        # else it's strikethrough
+        if not high_strike[1]:
+            high_strike[1] = True
+            return '<del>'
+        else:
+            high_strike[1] = False
+            return '</del>'

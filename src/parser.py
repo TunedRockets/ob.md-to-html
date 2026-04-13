@@ -5,15 +5,14 @@ import unicodedata as uni
 
 # grab HTML entities:
 from pathlib import Path
-import json
 from typing import overload
-
 
 import sys
 directory = str(Path(__file__).parent.resolve()) # the src directory
 sys.path.append(directory)
 from utils import *
 from inline import *
+from parser_settings import *
 
 def parse_md(text:StringIO)->str:
     '''
@@ -655,6 +654,15 @@ class List_item(Block):
         '''if parent list is "loose", paragraphs are wrapped in <p> tags, otherwise they aren't'''
         
         res = '<li>'
+
+        # check for checkmark:
+        if len(self.children)>0 and isinstance(self.children[0],Paragraph) and re.match(r'^\[ \]',self.children[0].contents):
+            self.children[0].contents = self.children[0].contents.replace('[ ]',
+                                                                          UNCHECKED_CHECKMARK)
+        elif len(self.children)>0 and isinstance(self.children[0],Paragraph) and re.match(r'^\[x\]',self.children[0].contents):
+            self.children[0].contents = self.children[0].contents.replace('[x]',
+                                                                          CHECKED_CHECKMARK)
+
         for child in self.children:
             if isinstance(child, Paragraph) and not self.parent.loose: #type:ignore
                 res += inline_parse(child.contents,link_references) 
