@@ -20,4 +20,5 @@ The following extras will be supported:
 - [x][] LaTeX snippets (via mathjax)
     Unlike pure MathJax, OB only starts inline math when $ not followed by whitespace, and only ends it when not preceded by whitespace
     To not have false positives as well, the indicators for starting and ending math should be changed, (and set in MathJax on the HTML side) 
+- [][] mermaid diagrams?
 
