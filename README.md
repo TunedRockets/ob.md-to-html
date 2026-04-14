@@ -14,6 +14,10 @@ The following extras will be supported:
 - [][] block definitions (?)
 - [][] footnotes
 - [][] callouts
-- [][] comments
-- [][] LaTeX snippets (via mathjax)
+- [x][] comments
+    inline comments and block comments are replaced by their HTML counterparts,
+    inline is indicated by `%%` and block is indicated by `%%\n`. they are replaced by `<!--` and `-->`
+- [x][] LaTeX snippets (via mathjax)
+    Unlike pure MathJax, OB only starts inline math when $ not followed by whitespace, and only ends it when not preceded by whitespace
+    To not have false positives as well, the indicators for starting and ending math should be changed, (and set in MathJax on the HTML side) 
 

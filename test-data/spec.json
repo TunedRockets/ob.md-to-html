@@ -5415,5 +5415,119 @@
     "html": "<p><a href=\"xmpp:foo@bar.baz/txt\">xmpp:foo@bar.baz/txt</a>/bin</p>\n",
     "example": 1635,
     "section": "GFM Autolinks"
+  },
+  {
+    "markdown":"Math is indicated by dollars: $ax+b$\n",
+    "html": "<p>Math is indicated by dollars: !$[ax+b]$!</p>\n",
+    "example": 2005,
+    "section": "OB LaTeX"
+  },
+  {
+    "markdown":"Need no whitespace before: $ ax+b$\n",
+    "html": "<p>Need no whitespace before: $ ax+b$</p>\n",
+    "example": 2006,
+    "section": "OB LaTeX"
+  },
+  {
+    "markdown":"Need no whitespace after: $ax+b $\n",
+    "html": "<p>Need no whitespace after: $ax+b $</p>\n",
+    "example": 2007,
+    "section": "OB LaTeX"
+  },
+  {
+    "markdown":"This allows internal dollars: $a+5 = 7 $.$\n",
+    "html": "<p>This allows internal dollars: !$[a+5 = 7 $.]$!</p>\n",
+    "example": 2008,
+    "section": "OB LaTeX"
+  },
+  {
+    "markdown":"Block math is indicated by double dollar $$\rm block$$\n",
+    "html": "<p>Block math is indicated by double dollar !$$[\rm block]$$!</p>\n",
+    "example": 2009,
+    "section": "OB LaTeX"
+  },
+  {
+    "markdown":"Block also allows inside dollars: $$ 5$ $$\n",
+    "html": "<p>Block also allows inside dollars: !$$[ 5$ ]$$!</p>\n",
+    "example": 2010,
+    "section": "OB LaTeX"
+  },
+  {
+    "markdown":"In inline math, dollar interpretation overrules starting blocks: $a+5 = 7 $$ like this $$\n",
+    "html": "<p>In inline math, dollar interpretation overrules starting blocks: !$[a+5 = 7 $]$! like this $$</p>\n",
+    "example": 2011,
+    "section": "OB LaTeX"
+  },
+  {
+    "markdown":"Unfinished inlines are treated as literals $to allow regular dollars\n",
+    "html": "<p>Unfinished inlines are treated as literals $to allow regular dollars</p>\n",
+    "example": 2012,
+    "section": "OB LaTeX"
+  },
+  {
+    "markdown":"Block math is however finished$$\n at end of file\n",
+    "html": "<p>Block math is however finished!$$[\n at end of file]$$!</p>\n",
+    "example": 2013,
+    "section": "OB LaTeX"
+  },
+  {
+    "markdown":"Unless it's the $$final line\n",
+    "html": "<p>Unless it's the $$final line</p>\n",
+    "example": 2014,
+    "section": "OB LaTeX"
+  },
+  {
+    "markdown":"Everything in a math inline is treated literally: $not <div> ==not highlight== *not italics* \\not escaped$\n",
+    "html": "<p>Everything in a math inline is treated literally: !$[not &lt;div&gt; ==not highlight== *not italics* \\not escaped]$!</p>\n",
+    "example": 2015,
+    "section": "OB LaTeX"
+  },
+  {
+    "markdown":"Everything in a math Block is treated literally:\n$$\nnot setext\n---\nnot <div> ==not highlight== *not italics* \\not escaped\n$$\n",
+    "html": "<p>Everything in a math Block is treated literally:\n!$$[\nnot setext\n---\nnot &lt;div&gt; ==not highlight== *not italics* \\not escaped\n]$$!</p>\n",
+    "example": 2016,
+    "section": "OB LaTeX"
+  },
+  {
+    "markdown":"Escaped dollars are treated as literals: \\$not math$math \\$ dollar$\n",
+    "html": "<p>Escaped dollars are treated as literals: \\$not math!$[math $ dollar]$!</p>\n",
+    "example": 2017,
+    "section": "OB LaTeX"
+  },
+  {
+    "markdown":"\\$$inline$ not block\n",
+    "html": "<p>$!$[inline]$! not block</p>\n",
+    "example": 2018,
+    "section": "OB LaTeX"
+  },
+  {
+    "markdown":"Comments in OB are converted to HTML %%like this%%\n",
+    "html": "<p>Comments in OB are converted to HTML <!--like this--></p>\n",
+    "example": 2019,
+    "section": "OB Comments"
+  },
+  {
+    "markdown":"Block comments exists outside of the block structure\n%%\nlike that\n%%\n",
+    "html": "<p>Block comments exists outside of the block structure</p><!--\nlike that\n-->\n",
+    "example": 2020,
+    "section": "OB Comments"
+  },
+  {
+    "markdown":"escaped parentheses are not comments\\%% visible \\%%\n",
+    "html": "<p>escaped parentheses are not comments%% visible %%</p>\n",
+    "example": 2021,
+    "section": "OB Comments"
+  },
+  {
+    "markdown":"comments are auto closed at end of file %% not shown\n",
+    "html": "<p>comments are auto closed at end of file <!-- not shown--></p>\n",
+    "example": 2022,
+    "section": "OB Comments"
+  },
+  {
+    "markdown":"nothing is processed inside comments %% <no> *no* ==no==%%\n",
+    "html": "<p>nothing is processed inside comments <!-- &lt;no&gt; *no* ==no==--></p>\n",
+    "example": 2023,
+    "section": "OB Comments"
   }
 ]
