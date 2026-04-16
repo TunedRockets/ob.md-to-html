@@ -78,6 +78,10 @@ def inline_parse(text:str, link_references, nolinks=False)->str:
         if (t := parse_high_and_strike(stream,c, high_strike)):
             out[-1] += t # type: ignore
             continue
+
+        if (t := parse_extended_autolink(stream,c,out)):
+            out.extend([t,''])
+            continue
         
         # else:
         out[-1] += replace_danger(c) # check for danger
@@ -148,6 +152,20 @@ def eat_until(stream:fakestream, stop:str)->str:
             stream.idx = startidx
             return ''
     return buf
+
+def reat_until(stream:fakestream, pattern:str)->str:
+    '''Will read from stream until result matches the regex pattern, then returns matching string
+    if it reaches EOF without match, returns '' and resets the stream'''
+    startidx = stream.idx
+    buf = []
+    while (c:= stream.read(1)) != '':
+        buf.append(c)
+        if re.match(pattern, "".join(buf)):
+            return "".join(buf)
+    else:
+        stream.idx = startidx
+        return ''
+
 
 def parse_inline_code(stream:fakestream, c:str)->str|bool:
     '''read character, and if it's inline code, returns the resulting string.
@@ -802,3 +820,48 @@ def parse_high_and_strike(stream:fakestream,c:str, high_strike:list[bool])->str|
         else:
             high_strike[1] = False
             return '</del>'
+        
+def parse_extended_autolink(stream:fakestream,c:str,out:list[str])->str|bool:
+    '''Check for untagged autolinks, which detects 
+    "www.", "http://", "https://", "mailto:", "xmpp:", and "@" to backtrack emails'''
+
+
+    if c not in ('@', 'w', 'h', 'm', 'x'): return False # can't be start
+    
+
+    # check for email:
+    if c == '@':
+        # pre:
+        pre = out[-1] # since there's no break in the middle of what would be an address
+        person = re.search(r'[\w\.+-]+$',pre)
+        if not person is None:
+            # might be valid
+            startidx = stream.idx # so we can go back
+            post = reat_until(stream, r'[a-zA-Z0-9_\.-]+[a-zA-Z0-9].') # since + is greedy, should catch up until invalid
+            if post != '':
+                email = person[0] + '@' + post
+                if valid_email(email):
+                    return f'<a href="mailto:{email}">{email}</a>'
+                else:
+                    # wind back index not valid:
+                    stream.idx = startidx
+    # else:
+    
+    if not re.match(r'[\s*_~\(]',get_prev(out,1)): return False # must have whitespace before
+
+    bite = stream.read(8)
+    # TODO: reat_until to get valid string
+    if bite[0:4] == 'www.':
+        pass
+    elif bite[0:7] == 'http://':
+        pass
+    elif bite == 'https://':
+        pass
+    elif bite[0:7] == 'mailto:':
+        pass
+    elif bite[0:5] == 'xmpp:':
+        pass
+    else:
+        stream.move(-len(bite))
+        return False
+        
