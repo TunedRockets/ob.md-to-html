@@ -220,7 +220,7 @@ def sanitize_text(s:str, escape:bool=True, resolve_refs:bool=True, replace_dange
     return s
 
 def replace_danger(s:str)->str:
-    '''replaces dangerous HTML characters with safe counterparts'''
+    '''replaces dangerous HTML characters in string with safe counterparts'''
     o = []
     for c in s:
         if c in HTML_Danger.keys(): o.append(HTML_Danger[c])

@@ -9,7 +9,8 @@ The following extras will be supported:
 - [x][x] strikethrough (& highlight)
     note: unlike GFM, strike and highlight are 2 indicators, and more will be included after the indicator (OB a bit inconsistent)
 - [x][] autolink extension
-    this means that CM example 608,611, and 612 are invalid
+    this means that CM example 608,611, and 612 are invalid (so were removed)
+    GFM test 624 i disagree with, so it's excluded as well
 - [][] wikilinks (with alias and paragraph linking)
 - [][] block definitions (?)
 - [][] footnotes

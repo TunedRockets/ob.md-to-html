@@ -5351,7 +5351,7 @@
     "section": "GFM Autolinks"
   },
   {
-    "markdown":"www.google.com/search?q=Markup+(business)\nwww.google.com/search?q=Markup+(business)))\n(www.google.com/search?q=Markup+(business))\n(www.google.com/search?q=Markup+(business)\n",
+    "markdown":"www.google.com/search?q=Markup+(business)\n\nwww.google.com/search?q=Markup+(business)))\n\n(www.google.com/search?q=Markup+(business))\n\n(www.google.com/search?q=Markup+(business)\n",
     "html": "<p><a href=\"http://www.google.com/search?q=Markup+(business)\">www.google.com/search?q=Markup+(business)</a></p>\n<p><a href=\"http://www.google.com/search?q=Markup+(business)\">www.google.com/search?q=Markup+(business)</a>))</p>\n<p>(<a href=\"http://www.google.com/search?q=Markup+(business)\">www.google.com/search?q=Markup+(business)</a>)</p>\n<p>(<a href=\"http://www.google.com/search?q=Markup+(business)\">www.google.com/search?q=Markup+(business)</a></p>\n",
     "example": 1625,
     "section": "GFM Autolinks"

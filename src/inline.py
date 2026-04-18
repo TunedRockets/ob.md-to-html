@@ -80,7 +80,7 @@ def inline_parse(text:str, link_references, nolinks=False)->str:
             continue
 
         if (t := parse_extended_autolink(stream,c,out)):
-            out.extend([t,''])
+            out.extend([t,'']) # type:ignore
             continue
         
         # else:
@@ -136,6 +136,9 @@ class fakestream:
 
     @property
     def next(self): return self.content[self.idx]
+
+    @property
+    def rest(self): return self.content[self.idx:]
 
 def eat_until(stream:fakestream, stop:str)->str:
     '''Will read from the stream until the specified string is reached
@@ -822,9 +825,9 @@ def parse_high_and_strike(stream:fakestream,c:str, high_strike:list[bool])->str|
             return '</del>'
 
 
-VALID_DOMAIN = r'([\w.-]+.[\w.-]+)([^ <]*)\b' # alphanumeric, dash, and at least one period
+VALID_DOMAIN = r'([\w\.-]+\.[\w\.-]+)([^<\s]*)' # alphanumeric, dash, and at least one period
 # first group is domain, second is path 
-EXTENDED_EMAIL = r'([\w\.+-]+@[\w.-]+.[\w.-]+)(/[\w@\.]+)?'
+EXTENDED_EMAIL = r'([\w\.+-]+@[\w\.-]+\.[\w\.-]+)(/[\w@\.]+)?'
 # first is mail, second is xmpp resource
 
 def parse_extended_autolink(stream:fakestream,c:str,out:list[str])->str|bool:
@@ -842,20 +845,29 @@ def parse_extended_autolink(stream:fakestream,c:str,out:list[str])->str|bool:
         person = re.search(r'[\w\.+-]+$',pre)
         if not person is None:
             # might be valid
-            post = reat_until(stream, r'[a-zA-Z0-9_\.-]+[a-zA-Z0-9].') # since + is greedy, should catch up until invalid
-            if post != '':
-                email = person[0] + '@' + post
+
+            post = re.match(r'[\w\.-]+\.[\w\.-]+', stream.rest) # since + is greedy, should catch up until invalid
+            if not post is None:
+                email = person[0] + '@' + post[0]
                 if valid_email(email):
-                    return f'<a href="mailto:{email}">{email}</a>'
+                    # clean out:
+                    out[-1] = out[-1][:-len(person[0])]
+                    stream.move(len(post[0]))
+
+                    return f'<a href="mailto:{replace_danger(email)}">{replace_danger(email)}</a>'
                 else:
                     # wind back index not valid:
                     stream.idx = startidx
+                    return False
+        else:
+            return False
     # else:
-    
-    if not re.match(r'[\s*_~\(]',get_prev(out,1)): return False # must have whitespace before
+    prev = get_prev(out,1)
+    if prev != '' and not re.match(r'[\s*_~\(]',prev): return False # must have whitespace before
 
-    bite = stream.read(8)
+    bite = c + stream.read(7)
     mail = False
+    add_prefix = False
     
     
 
@@ -864,9 +876,14 @@ def parse_extended_autolink(stream:fakestream,c:str,out:list[str])->str|bool:
         stream.move(-len(bite))
     elif bite[0:7] == 'http://':
         prefix = 'http://'
+        add_prefix = True
         stream.move(-1)
     elif bite == 'https://':
         prefix = 'https://'
+        add_prefix = True
+    elif bite[0:6] == 'ftp://':
+        prefix = 'ftp://'
+        add_prefix = True
     elif bite[0:7] == 'mailto:':
         mail = True
         protocol = 'mailto:'
@@ -876,18 +893,17 @@ def parse_extended_autolink(stream:fakestream,c:str,out:list[str])->str|bool:
         protocol = 'xmpp:'
         stream.move(-3)
     else:
-        stream.move(-len(bite))
+        stream.idx = startidx
         return False
     
     if not mail:
-        # link:
-        grabbed = reat_until(stream, VALID_DOMAIN)
-        if grabbed == '': return False
-        link = re.match(VALID_DOMAIN,grabbed)[0] #type:ignore remove non-matching
+        # lookahead for link:
+        grabbed = re.match(VALID_DOMAIN, stream.rest)
+        if grabbed is None: return False
        
         # "Extended Autolink Path Validation":
         # remove trailing puctuation:
-        rematch = re.match(r'(.*)[^?!\.,:\*_~]*$',link)
+        rematch = re.match(r'(.*)[?!\.,:\*_~]*$',grabbed[0])
         if rematch is None:
             stream.idx = startidx
             return False
@@ -897,30 +913,36 @@ def parse_extended_autolink(stream:fakestream,c:str,out:list[str])->str|bool:
         if link[-1] == ')':
             op_par = link.count('(')
             cl_par = link.count(')')
-            link = link[:-(max(0,(cl_par-op_par)))]
+            if op_par != cl_par:
+                link = link[:-(max(0,(cl_par-op_par)))]
         
         # check for entity references:
         if link[-1] == ';':
-            rematch = re.match(r'(.*)(&[\w]+;)?', link)
-            if rematch is None:
-                stream.idx = startidx
-                return False
-            link = rematch[1]
+            rematch = re.search(r'&[\w]+;$', link)
+            if not rematch is None:
+                link = link[:-len(rematch[0])]
+
             
         
-        # move back stream:
-        stream.move((len(link)-len(grabbed)))
-        link = prefix + link # type: ignore
-        return f'<a href="{link}">{link}</a>'
+        # move stream:
+        stream.move(len(link))
+        l = replace_danger(prefix +link) # type: ignore
+        n = replace_danger((prefix if add_prefix else '') + link)# type: ignore
+        return f'<a href="{l}">{n}</a>'
     else:
         # mail
         # eat until space or EOL:
-        grabbed = reat_until(stream, r'\B+\b')
-        if grabbed == '': return False
-        link = re.match(EXTENDED_EMAIL,grabbed)
+        grabbed = re.match(r'.+\s',stream.rest)
+        if grabbed is None: return False
+        link = re.match(EXTENDED_EMAIL,grabbed[0])
         if link is None:
             stream.idx = startidx
             return False
+        # move stream:
+        stream.move(len(link[0]))
+        extra = link[2] if not link[2] is None else ''
+        text = protocol + link[1] + (extra if protocol == 'xmpp:' else '') # type: ignore
+        return f'<a href="{replace_danger(text)}">{replace_danger(text)}</a>'
 
         
 
