@@ -40,6 +40,10 @@ def inline_parse(text:str, link_references, nolinks=False)->str:
         if (t := parse_inline_code(stream,c)):
             out.extend([t, '']) # type:ignore
             continue
+
+        if (t := parse_inline_math(stream,c)):
+            out.extend([t, '']) # type:ignore
+            continue
         
         if (t := parse_inline_emphasis(stream,out,c, delimeter_stack)):
             out.extend([t, '']) # type:ignore
@@ -168,7 +172,6 @@ def reat_until(stream:fakestream, pattern:str)->str:
     else:
         stream.idx = startidx
         return ''
-
 
 def parse_inline_code(stream:fakestream, c:str)->str|bool:
     '''read character, and if it's inline code, returns the resulting string.
@@ -756,8 +759,9 @@ def char_counter(s:fakestream, c:str)->int:
     return tick_len
 
 def get_prev(out:list[str], n:int =1)->str:
-    '''get last n chars of out or '' if none exists'''
+    '''get last n chars of out or '' if none exists, -1 grabs entirety of out'''
     s = ''.join(out)
+    if n == -1: return s
     return s[-n:] if len(s)>=n else ''
 
 
@@ -835,24 +839,35 @@ def parse_extended_autolink(stream:fakestream,c:str,out:list[str])->str|bool:
     "www.", "http://", "https://", "mailto:", "xmpp:", and "@" to backtrack emails'''
 
 
-    if c not in ('@', 'w', 'h', 'm', 'x'): return False # can't be start
+    if c not in ('@', 'w', 'h', 'm', 'x', 'f'): return False # can't be start
     startidx = stream.idx # if we fail to match
 
     # check for email:
     if c == '@':
         # pre:
-        pre = out[-1] # since there's no break in the middle of what would be an address
-        person = re.search(r'[\w\.+-]+$',pre)
+        # pre = out[-1] # since there's no break in the middle of what would be an address
+        pre = get_prev(out, -1)
+        person = re.search(r'(^|\s)([\w\.+-]+)$',pre)
         if not person is None:
             # might be valid
 
             post = re.match(r'[\w\.-]+\.[\w\.-]+', stream.rest) # since + is greedy, should catch up until invalid
             if not post is None:
-                email = person[0] + '@' + post[0]
-                if valid_email(email):
-                    # clean out:
-                    out[-1] = out[-1][:-len(person[0])]
-                    stream.move(len(post[0]))
+                email = person[2] + '@' + post[0].rstrip('.')
+                # GFM has extra rules on email validity, no `-` or `_` allowed at the end
+                if valid_email(email) and not email[-1] in ('-','_'):
+                    
+                
+                    # clean out TODO: MIGHT RUIN EMPHASIS
+                    toclean = len(person[2])
+                    idx = 1
+                    while len(out[-idx]) < toclean:
+                        toclean -= len(out[-idx])
+                        out[-idx] = ''
+                        idx += 1
+                    # clean out final
+                    out[-idx] = out[-idx][:-(toclean)]
+                    stream.move(len(post[0].rstrip('.')))
 
                     return f'<a href="mailto:{replace_danger(email)}">{replace_danger(email)}</a>'
                 else:
@@ -884,6 +899,7 @@ def parse_extended_autolink(stream:fakestream,c:str,out:list[str])->str|bool:
     elif bite[0:6] == 'ftp://':
         prefix = 'ftp://'
         add_prefix = True
+        stream.move(-2)
     elif bite[0:7] == 'mailto:':
         mail = True
         protocol = 'mailto:'
@@ -903,7 +919,7 @@ def parse_extended_autolink(stream:fakestream,c:str,out:list[str])->str|bool:
        
         # "Extended Autolink Path Validation":
         # remove trailing puctuation:
-        rematch = re.match(r'(.*)[?!\.,:\*_~]*$',grabbed[0])
+        rematch = re.match(r'(.*?)[?!\.,:\*_~]*$',grabbed[0])
         if rematch is None:
             stream.idx = startidx
             return False
@@ -938,13 +954,112 @@ def parse_extended_autolink(stream:fakestream,c:str,out:list[str])->str|bool:
         if link is None:
             stream.idx = startidx
             return False
+        
+        # GFM has extra rules on email validity, no `-` or `_` allowed at the end
+        if link[0][-1] in ('_','-'):
+            stream.idx = startidx
+            return False
+        # trailing `.` is dropped:
+
         # move stream:
-        stream.move(len(link[0]))
+        stream.move(len(link[0].rstrip('.')))
         extra = link[2] if not link[2] is None else ''
-        text = protocol + link[1] + (extra if protocol == 'xmpp:' else '') # type: ignore
+        text = protocol + link[1].rstrip('.') + (extra if protocol == 'xmpp:' else '') # type: ignore
         return f'<a href="{replace_danger(text)}">{replace_danger(text)}</a>'
 
+def parse_inline_math(stream:fakestream, c:str)->str|bool:
+    '''read character, and if it's inline math, returns the resulting string.
+    else returns false and backs up stream'''
+    if c != '$': return False
+
+    startidx = stream.idx
+    # count length of dollars:
+    if (c := stream.read(1)) == '$':
+        block = True
+    elif re.match(r'\s', c): # can't start inline with whitespace
+        stream.idx = startidx
+        return False
+    else:
+        stream.move(-1)
+        block = False
+
+    
+    buf = []
+    # read until dollar:
+    n_end = False
+    while (c := stream.read(1)) != '':
+
+        if (not block) and c == '\n': break # inlines end at EOL
+        if c == '\\':
+            buf.append(c)
+            buf.append(stream.read(1))
+            continue
+
+
+        if c != '$':
+            buf.append(c)
+            continue
+        elif (not block) and re.match(r'\s', buf[-1]): # can't end one whitespace
+            buf.append(c)
+            continue
+
+        else: # might be proper end
+            if block:
+                # check for two
+                d = stream.read(1)
+                if d != '$':
+                    buf.append(c)
+                    buf.append(d)
+                    continue
+            # end 
+            n_end = True
+            break
+
+    # finish out:
+    buf = ''.join(buf)
+    
+    # if we didn't finish normally (reached EOL or EOF):
+
+    if not n_end:
+        stream.idx = startidx
+        return False
         
+
+    # valid sequence:
+    if block:
+        return '!$$[' + replace_danger(buf) + ']$$!'
+    else:
+        return '!$[' + replace_danger(buf) + ']$!'
+
+
+
+    # # found ticks, read into buffer until similar length found:
+    # buf = []
+    # while (d := stream.read(1)) != '':
+    #     if d != '`':
+    #         # just insert regular characters (except make newlines to space)
+    #         # and sanitize it as html
+    #         buf.append(d if d != '\n' else ' ')
+    #         continue
+    #     # else:
+    #     m = char_counter(stream, '`') + 1 # number of ticks
+    #     if m == n:
+    #         # was matching, return buffer and tags
+    #         out = ''.join(buf)
+
+    #         # do space stripping rule.
+    #         if out[0] == ' ' and out[-1] == ' ' and out.replace(' ','') != '':
+    #             out = out[1:-1]
+
+    #         return '<code>' + replace_danger(out) + '</code>'
+    #     else:
+    #         # just treat tags literally:
+    #         buf.extend(['`']*m)
+    #         continue
+    # # reached EOF, back up and ticks as literal:
+    # if d == '': stream.move(-1) # special case hit EOF
+    # stream.move(-len(buf))
+    # return '`' * n
 
         
 

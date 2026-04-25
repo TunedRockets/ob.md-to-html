@@ -5465,17 +5465,12 @@
     "section": "OB LaTeX"
   },
   {
-    "markdown":"Block math is however finished$$\n at end of file\n",
-    "html": "<p>Block math is however finished!$$[\n at end of file]$$!</p>\n",
+    "markdown":"Unfinished blocks are treated as literals $$to allow regular dollars\n",
+    "html": "<p>Unfinished blocks are treated as literals $$to allow regular dollars</p>\n",
     "example": 2013,
     "section": "OB LaTeX"
   },
-  {
-    "markdown":"Unless it's the $$final line\n",
-    "html": "<p>Unless it's the $$final line</p>\n",
-    "example": 2014,
-    "section": "OB LaTeX"
-  },
+
   {
     "markdown":"Everything in a math inline is treated literally: $not <div> ==not highlight== *not italics* \\not escaped$\n",
     "html": "<p>Everything in a math inline is treated literally: !$[not &lt;div&gt; ==not highlight== *not italics* \\not escaped]$!</p>\n",
@@ -5483,14 +5478,14 @@
     "section": "OB LaTeX"
   },
   {
-    "markdown":"Everything in a math Block is treated literally:\n$$\nnot setext\n---\nnot <div> ==not highlight== *not italics* \\not escaped\n$$\n",
-    "html": "<p>Everything in a math Block is treated literally:\n!$$[\nnot setext\n---\nnot &lt;div&gt; ==not highlight== *not italics* \\not escaped\n]$$!</p>\n",
+    "markdown":"Everything in a math Block is treated literally:\n$$\nnot <div> ==not highlight== *not italics* \\not escaped\n$$\n",
+    "html": "<p>Everything in a math Block is treated literally:\n!$$[\nnot &lt;div&gt; ==not highlight== *not italics* \\not escaped\n]$$!</p>\n",
     "example": 2016,
     "section": "OB LaTeX"
   },
   {
     "markdown":"Escaped dollars are treated as literals: \\$not math$math \\$ dollar$\n",
-    "html": "<p>Escaped dollars are treated as literals: \\$not math!$[math $ dollar]$!</p>\n",
+    "html": "<p>Escaped dollars are treated as literals: $not math!$[math \\$ dollar]$!</p>\n",
     "example": 2017,
     "section": "OB LaTeX"
   },
