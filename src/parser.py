@@ -1195,6 +1195,209 @@ class Link_reference(Block):
         if self.open: self.evaluate_ref() # just in case we're last
         return '' # link references aren't printed
 
+class Block_comment(Block):
+
+    @staticmethod
+    def can_interrupt(b: Block, peek=False) -> Block | None | bool:
+        # interrupt only if entire line is `%%\n`
+        if Block.current_line == '%%\n': 
+            Block.current_line = '' # clear line
+            if peek:
+                return True
+            else: return Block_comment(b)
+        else: return None
+    
+    def can_continue(self, peek=False) -> bool:
+        # continue unless line contains %%, in whihc case eat until that point
+        if not self.open: return False
+
+        if '%%' in Block.current_line:
+            if not peek:
+                p,s,a = Block.current_line.partition('%%')
+                self.add_content(p)
+                Block.current_line = a
+                self.open = False
+            return False
+        else: return True
+
+    def add_content(self, content: str):
+        self.contents += content
+    
+    def realize(self) -> str:
+        return '<!--\n' + replace_danger(self.contents) + '-->'
+
+
+ROW_MATCH = r'\|?([^\|]+\|)+([^\|]+)?'
+SPLIT_ON = r'(?<=[^\\])\|(?!$)'
+class Table(Block):
+
+    '''
+    Tables consist of a header row, followed by a delimeter row
+    and an arbitrary number (including 0) of data rows
+
+    Each row is text treated as inline, separated by |
+    leading and trailing pipes are recommended but not required
+    (except for the case of single column tables, where they are needed)
+
+    delimeter row is row whise contents are a series of `-`, flanked 
+    optionally by `:` to indicate left- right- or center alignment.
+    it must match the header row in number of pipes, else the parse is invalid
+
+    invalid parses are turned into paragraps
+
+    escaped pipes `\\|` are ignored for parsing.
+
+    table broken on empty line or start of another block
+
+    number of columns are decided by header,
+    futher rows will match this, with empty cells added and excess cells discarded
+
+    if ther is no body, the `<tbody>` block is omitted, otherwise the structure is:
+    (indentation for clarity only)
+    <table>
+        <thead>
+            <tr>
+                <th>foo</th>
+                <th>bar</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>baz</td>
+                <td>bim</td>
+            </tr>
+        </tbody>
+    </table>
+    
+    '''
+    def __init__(self, parent: Block | None, row1:list[str], contents: str = "") -> None:
+        super().__init__(parent, contents)
+        self.rows = [row1]
+        self.startline = True
+        
+
+    
+    @staticmethod
+    def can_interrupt(b: Block, peek=False) -> Block | None | bool:
+        '''is this a potential header'''
+        if (re.match(ROW_MATCH, Block.current_line)) is None:
+            return None
+        # else:
+        cells = re.split(SPLIT_ON, Block.current_line.rstrip('\n')) # doesn't take into account escaped escapes
+        #TODO: does this make empty at start and end?
+        cells[0] = cells[0].lstrip('|')
+        cells[-1] = cells[-1].rstrip('|')
+
+        if not peek:
+            
+            return Table(b,cells)
+        else: return True
+
+    def regress(self):
+        '''regress invalid table into paragraph'''
+        contents = "\n".join(['|'.join(r) for r in self.rows])
+        self.parent.children.remove(self)
+        if len(self.parent.children)>=1 and isinstance(self.parent.children[-1],Paragraph):
+            # give to previous paragraph:
+            p = self.parent.children[-1]
+            p.add_content(contents)
+            self.parent.open_child = p
+            
+            del self
+        else:
+            # create new paragraph
+            p = Paragraph(self.parent,contents)
+            del self
+
+    def can_continue(self, peek=False)->bool:
+
+        if self.startline:
+            if not peek:
+                self.startline = False
+                Block.current_line = ''
+            return True
+        if len(self.rows) == 1:
+            # check for delimeter row
+            if (re.match(ROW_MATCH, Block.current_line)) is None:
+                # no row at all:
+                if not peek: self.regress()
+                return False
+            # else:
+            cells = re.split(SPLIT_ON, Block.current_line.rstrip('\n'))
+            cells[0] = cells[0].lstrip('|')
+            cells[-1] = cells[-1].rstrip('|')
+            # ensure same number of delimeters:
+            if not len(cells) == len(self.rows[0]):
+                # not valid rows
+                if not peek: self.regress()
+                return False
+
+
+
+            for i in range(len(cells)):
+                m = re.match(r'(:?)-+(:?)',cells[i].strip())
+                if m is None:
+                    if not peek: self.regress()
+                    return False
+                # else: figure out alignment
+                if not peek:
+                    if m[1] == ':' and m[2] == ':':
+                        cells[i] = ' align="center"'
+                    elif m[1] == '' and m[2] == ':':
+                        cells[i] = ' align="right"'
+                    elif m[1] == ':' and m[2] == '':
+                        cells[i] = ' align="left"'
+                    else:
+                        cells[i] = ''
+            if not peek:
+                self.rows.append(cells)
+                Block.current_line = ''
+            return True
+        else: # in subsequent rows (non piped row assumed to be single entry):
+            # fill in rows
+            cells = re.split(SPLIT_ON, Block.current_line.rstrip('\n'))
+            cells[0] = cells[0].lstrip('|')
+            cells[-1] = cells[-1].rstrip('|')
+            self.rows.append(cells)
+            Block.current_line = ''
+            return True
+
+    def add_content(self, content: str):
+        '''should already eat content on can-continue'''
+        return
+    
+    def realize(self) -> str:
+
+        # check to make sure we're valid:
+        if not len(self.rows) >= 2:
+            # okay, we're not valid so we print like paragraph
+            contents = "\n".join(['|'.join(r) for r in self.rows])
+            return Paragraph(self,contents).realize()
+
+        parse_cell = lambda s: inline_parse(s.replace('\\|', '|'), link_references) # to deal with escaped pipes (not double escaped)
+
+        res = ['<table>\n<thead>\n<tr>\n']
+        aligns = self.rows.pop(1)
+        for i,head in enumerate(self.rows[0]):
+            res.append(f'<th{aligns[i]}>' + parse_cell(head) + '</th>\n')
+        res.append('</tr>\n</thead>\n')
+        if len(self.rows) > 1:
+            # body:
+            res.append('<tbody>\n')
+            for row in self.rows[1:]:
+                res.append('<tr>\n')
+
+                for i in range(len(aligns)):
+                    res.append(f'<td{aligns[i]}>')
+                    if len(row) > i:
+                        res.append(parse_cell(row[i]))
+                    res.append('</td>\n') 
+                res.append('</tr>\n')
+            res.append("</tbody>\n")
+        res.append('</table>\n')
+
+        return ''.join(res)
+
 class Paragraph(Block):
     
     def can_continue(self, peek= False) -> bool:

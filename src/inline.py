@@ -49,8 +49,6 @@ def inline_parse(text:str, link_references, nolinks=False)->str:
             out.extend([t, '']) # type:ignore
             continue
         
-        
-
         if (not nolinks) and (t := parse_inline_links(stream,out,c, link_references, delimeter_stack)):
             if isinstance(t, list): out = t
             else: out.extend([t, '']) # type:ignore
@@ -87,10 +85,15 @@ def inline_parse(text:str, link_references, nolinks=False)->str:
             out.extend([t,'']) # type:ignore
             continue
         
+        if (t:= parse_inline_comment(stream,c)):
+            out.extend([t,'']) #type:ignore
+            continue
+
         # else:
         out[-1] += replace_danger(c) # check for danger
 
     process_emphasis(out,delimeter_stack, -1)
+
     # remove end breaks:
     if out[-1][-7:] == "<br />\n": out[-1] = out[-1][:-7]
     # strip end spaces:
@@ -1031,36 +1034,27 @@ def parse_inline_math(stream:fakestream, c:str)->str|bool:
     else:
         return '!$[' + replace_danger(buf) + ']$!'
 
+def parse_inline_comment(stream:fakestream, c:str)->bool|str:
+    '''look for OB comments and parse them, ignoring everything inside'''
+    if c != '%': return False
+    if stream.next != '%': return False
+    else: stream.move(1)
+
+    # eat everything until %%
+    buf = []
+    while (c := stream.read(1)) != '':
+        if c != '%':
+            buf.append(c)
+            continue
+        elif (d := stream.read(1)) != '%':
+            buf.append(c)
+            buf.append(d)
+            continue
+        else:
+            break
+    contents = ''.join(buf)
+    return '<!--' + replace_danger(contents.rstrip('\n')) + '-->'
 
 
-    # # found ticks, read into buffer until similar length found:
-    # buf = []
-    # while (d := stream.read(1)) != '':
-    #     if d != '`':
-    #         # just insert regular characters (except make newlines to space)
-    #         # and sanitize it as html
-    #         buf.append(d if d != '\n' else ' ')
-    #         continue
-    #     # else:
-    #     m = char_counter(stream, '`') + 1 # number of ticks
-    #     if m == n:
-    #         # was matching, return buffer and tags
-    #         out = ''.join(buf)
-
-    #         # do space stripping rule.
-    #         if out[0] == ' ' and out[-1] == ' ' and out.replace(' ','') != '':
-    #             out = out[1:-1]
-
-    #         return '<code>' + replace_danger(out) + '</code>'
-    #     else:
-    #         # just treat tags literally:
-    #         buf.extend(['`']*m)
-    #         continue
-    # # reached EOF, back up and ticks as literal:
-    # if d == '': stream.move(-1) # special case hit EOF
-    # stream.move(-len(buf))
-    # return '`' * n
-
-        
 
         

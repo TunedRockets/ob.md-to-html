@@ -5249,7 +5249,7 @@
   },
   {
     "markdown":"| abc | def |\n| --- | --- |\n| bar | baz |\nbar\n\nbar\n",
-    "html": "<table>\n<thead>\n<tr>\n<th>abc</th>\n<th>def</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>bar</td>\n<td>baz</td>\n</tr>\n<tr>\n<td>bar</td>\n<td></td>\n</tr>\n</tbody>\n</table>\n<p>bar</p>\n",
+    "html": "<table>\n<thead>\n<tr>\n<th>abc</th>\n<th>def</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>bar</td>\n<td>baz</td>\n</tr>\n</tbody>\n</table>\n<p>bar</p>\n<p>bar</p>\n",
     "example": 1202,
     "section": "GFM table"
   },
@@ -5503,7 +5503,7 @@
   },
   {
     "markdown":"Block comments exists outside of the block structure\n%%\nlike that\n%%\n",
-    "html": "<p>Block comments exists outside of the block structure</p><!--\nlike that\n-->\n",
+    "html": "<p>Block comments exists outside of the block structure</p>\n<!--\nlike that\n-->\n",
     "example": 2020,
     "section": "OB Comments"
   },
