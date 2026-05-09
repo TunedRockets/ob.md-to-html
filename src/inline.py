@@ -441,43 +441,77 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
     if not c in ('[','!', ']'): return False
     # this one's a doosey
 
-    # check for `![`:
-    if stream.read(1) == '[' and c == '!':
+    # check for `![`, `]]`, and `[[`:
+    d = stream.read(1)
+    if d == '[' and c == '!':
         c = '!['
+    elif d == '[' and c == '[':
+        c = '[['
+    elif d == ']' and c == ']':
+        c = ']]'
     else:
         stream.move(-1)
     
-    if c in ('[', '!['):
+    if c in ('[', '![', '[['):
         # start of link
         delimeter_stack.append({
             "type": c,
             'active':True,
             "dir": 0, # irrelevant for links
             "length":0, # ---||---
-            "idx": len(out) # place in out where it is
+            "idx": len(out), # place in out where it is
+            'wiki': (c == '[[')
         })
         return c
     # else, close the link
     for delim in delimeter_stack[::-1]:
-        if delim['type'] not in ('[', '!['): continue
+        if delim['type'] not in ('[', '![', '[['): continue
         # found one!
         if not delim['active']:
             # inactive, remove and insert literal
             delimeter_stack.remove(delim)
             return c
+        if (c == ']]') != (delim['wiki']):
+            # wrong type, continue
+            continue
+
         # now we get to the complicated stuff!
         
 
         link_content = "".join(out[delim['idx']:])[len(delim['type']):]
         # value inside brackets
+
+        
+
         
 
         # check if inline, reference, collapsed, or shortcut
         # if it is we define content and (label or title/dest)
-        content = ''; label = ''; title = ''; dest = '' # zero out label, content, title, & dest
+        content = ''; label = ''; title = ''; dest = ''; heading = '' # zero out label, content, title, & dest
         linktype = 'none'
-        buf = [stream.read(1)]
-        for _ in [1]: # for control flow, so we can break out
+
+        # deal with wikilink:
+        if delim['wiki']:
+            # same logic as shortcut, but with extra parsing
+            m = re.match(r'([^#]+)#?([^\|]+)(.*)$',link_content)
+            if m is None:
+                # bad wiki, treat as inactive
+                delimeter_stack.remove(delim)
+                return c
+            label = m[1]
+            heading = m[2]
+            content = m[3] if m[3] != '' else m[0]
+            if label == '': # internal heading link, no need to do more
+                out.append(f'<a href="{'#'+heading}"' +  
+                f'>{content}</a>')
+                return out
+            # else:
+            linktype = 'wiki'
+
+        if linktype != 'wiki':
+            buf = [stream.read(1)]
+        else: buf = []
+        for _ in ([1] if linktype != 'wiki' else []): # for control flow, so we can break out
             match buf[0]:
 
                 case '[':
@@ -617,6 +651,7 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
         dest = sanitize_text(dest, replace_dangerous=False)
         # more sanitizing for URI specifically:
         dest = URI_sanitize(dest)
+        if heading != '': dest += '#' + heading
 
         # contents should be parsed as inline, and 
         # delimeters contained within should be removed.

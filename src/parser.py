@@ -14,17 +14,17 @@ from utils import *
 from inline import *
 from parser_settings import *
 
-def parse_md(text:StringIO)->str:
+def parse_md(text:StringIO, link_references:list|None = None)->str:
     '''
     Takes a string-input (like a file) comprising a .md document,
     and returns a string containing the equivalent
     HTML.  (perhaps make it a string output as well?)
     
     '''
-    global link_references
-    link_references = []
+    
+    if link_references is None: link_references = []
 
-    Block.init(text)
+    Block.init(text, link_references)
     while Block.read_line(): pass # read all lines
 
     Link_reference.evaluate_all()
@@ -41,6 +41,13 @@ class Block():
     current_line:str = ''
     prev_line:str = ''
     current_open:"Block"
+    Link_references = []
+    ''' Link references follow the format:
+            {
+                "label": label_collapse(...),
+                "dest": ...,
+                "title": ...
+            }'''
 
     def __init__(self,parent:"Block|None", contents:str = "") -> None:
         self.contents:str = contents
@@ -69,11 +76,12 @@ class Block():
         self.open_child:"Block|None" = None
 
     @staticmethod
-    def init(input:StringIO):
+    def init(input:StringIO, link_references):
         Block.root = Block(None)
         Block.input = input
         Block.reread_line = False
         Link_reference.link_instances = []
+        Block.link_references = link_references
 
     def is_lazy(self, indent:int)->bool:
         '''checks if current line is possibly a lazy continuation line,
@@ -286,7 +294,7 @@ class ATX_heading(Block):
         self.contents += content
 
     def realize(self) -> str:
-        return f"<h{self.level}>" + inline_parse(self.contents, link_references) + f"</h{self.level}>"
+        return f"<h{self.level}>" + inline_parse(self.contents, Block.link_references) + f"</h{self.level}>"
 
 SETEXT_RE = r'^(-+|=+)$' # TODO: test
 class Setext_heading(Block):
@@ -357,7 +365,7 @@ class Setext_heading(Block):
         pass # already grabbed the content, eat underline line
     
     def realize(self) -> str:
-        return f"<h{self.level}>" + inline_parse(self.contents, link_references) + f"</h{self.level}>"
+        return f"<h{self.level}>" + inline_parse(self.contents, Block.link_references) + f"</h{self.level}>"
 
 class Thematic_break(Block):
 
@@ -665,7 +673,7 @@ class List_item(Block):
 
         for child in self.children:
             if isinstance(child, Paragraph) and not self.parent.loose: #type:ignore
-                res += inline_parse(child.contents,link_references) 
+                res += inline_parse(child.contents,Block.link_references) 
             else:
                 res += ('\n' if res[-1] != '\n' else '') + child.realize()
                 res += ('\n' if res[-1] != '\n' else '') # no double newlines
@@ -1014,7 +1022,7 @@ class HTML_block(Block):
     def realize(self) -> str:
         return self.contents.rstrip('\n') # edge case
 
-link_references= [] # references have: label, link, and title (clean before use)
+
 class Link_reference(Block):
 
     link_instances:list["Link_reference"] = []
@@ -1096,7 +1104,7 @@ class Link_reference(Block):
         self.evaluated = True
 
         if (t :=self.isvalid()):
-            link_references.append({
+            Block.link_references.append({
                 "label": label_collapse(t[0]), # type:ignore
                 "dest": t[1], # type:ignore
                 "title": t[2] # type:ignore
@@ -1374,7 +1382,7 @@ class Table(Block):
             contents = "\n".join(['|'.join(r) for r in self.rows])
             return Paragraph(self,contents).realize()
 
-        parse_cell = lambda s: inline_parse(s.replace('\\|', '|'), link_references) # to deal with escaped pipes (not double escaped)
+        parse_cell = lambda s: inline_parse(s.replace('\\|', '|'), Block.link_references) # to deal with escaped pipes (not double escaped)
 
         res = ['<table>\n<thead>\n<tr>\n']
         aligns = self.rows.pop(1)
@@ -1415,4 +1423,4 @@ class Paragraph(Block):
         # things are added to container blocks
 
     def realize(self) -> str: # strip 0 to 3 spaces before
-        return "<p>" + inline_parse(self.contents, link_references) + "</p>"
+        return "<p>" + inline_parse(self.contents, Block.link_references) + "</p>"

@@ -6,6 +6,7 @@ directory = str(Path(__file__).parent.resolve()) # the main directory
 sys.path.append(directory)
 
 from src.parser import parse_md
+from src.utils import label_collapse
 import json
 from io import StringIO
 import pytest
@@ -41,9 +42,57 @@ def test_check(specs):
     assert guess.strip() == html.strip()
 
 
+
+def test_wikilinks1():
+    md = 'this is a [[wikilink]]\n'
+    link = {
+        "label":label_collapse('wikilink'),
+        'dest': '/uri',
+        'title': '',
+        'wiki':True
+    }
+    link_refs = [link]
+    html = '<p>this is a <a href="/uri">wikilink</a></p>'
+    guess = parse_md(StringIO(md), link_references=link_refs)
+    assert guess.strip() == html.strip()
+
+def test_wikilinks2():
+    md = 'wikilinks can target headings as well [[page#start]], but doesn\'t check validity\n'
+    link = {
+        "label":label_collapse('page'),
+        'dest': '/uri',
+        'title': '',
+        'wiki':True
+    }
+    link_refs = [link]
+    html = '<p>wikilinks can target headings as well <a href="/uri#start">page#start</a>, but doesn\'t check validity</p>'
+    guess = parse_md(StringIO(md), link_references=link_refs)
+    assert guess.strip() == html.strip()
+
+def test_wikilinks3():
+    md = 'even to headings inside the page [[#end]], which needs no link reference\n'
+
+    html = '<p>even to headings inside the page <a href="#start">end</a>, which needs no link reference</p>'
+    guess = parse_md(StringIO(md))
+    assert guess.strip() == html.strip()
+
+def test_wikilinks4():
+    md = 'finally wikilinks can have [[wikilink|alternate names]]\n'
+    link = {
+        "label":label_collapse('wikilink'),
+        'dest': '/uri',
+        'title': '',
+        'wiki':True
+    }
+    link_refs = [link]
+    html = '<p>finally wikilinks can have <a href="/uri">alternate names</a></p>'
+    guess = parse_md(StringIO(md), link_references=link_refs)
+    assert guess.strip() == html.strip()
+
+
 if __name__ == "__main__":
 
     # test individual test:
-    id = 658
+    id = 656
     test_check(spec[id])
 
