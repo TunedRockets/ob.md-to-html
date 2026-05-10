@@ -72,7 +72,7 @@ def test_wikilinks2():
 def test_wikilinks3():
     md = 'even to headings inside the page [[#end]], which needs no link reference\n'
 
-    html = '<p>even to headings inside the page <a href="#start">end</a>, which needs no link reference</p>'
+    html = '<p>even to headings inside the page <a href="#end">end</a>, which needs no link reference</p>'
     guess = parse_md(StringIO(md))
     assert guess.strip() == html.strip()
 

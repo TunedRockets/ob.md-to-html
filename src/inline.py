@@ -48,6 +48,10 @@ def inline_parse(text:str, link_references, nolinks=False)->str:
         if (t := parse_inline_emphasis(stream,out,c, delimeter_stack)):
             out.extend([t, '']) # type:ignore
             continue
+
+        if (not nolinks) and (t := parse_wikilinks(stream,c, link_references)):
+            out.extend([t, '']) # type:ignore
+            continue
         
         if (not nolinks) and (t := parse_inline_links(stream,out,c, link_references, delimeter_stack)):
             if isinstance(t, list): out = t
@@ -434,6 +438,81 @@ def parse_inline_emphasis(stream:fakestream, out:list[str], c:str, delimeter_sta
     # return the raw string:
     return c * n
 
+def parse_wikilinks(stream:fakestream, c:str, link_references)->str|bool:
+    '''like the inline link parser, but without the delimeter stack logic, simply assume nothing is inside wikilinks'''
+    if not c in ('[','!'): return False
+
+    startidx = stream.idx
+    if c == '[' and stream.read(1) == '[':
+        # normal
+        embed = False
+    elif c == '!' and stream.read(2) == '[[':
+        # embed
+        embed = True
+    else:
+        # not start of wikilink, revert
+        stream.idx = startidx
+        return False
+    
+
+    # get contents
+    contents = eat_until(stream,']]')
+    if contents == '': # not ended
+        stream.idx = startidx
+        return False
+    
+    contents = contents.rstrip(']]')
+    m = re.match(r'([^#]+?)?(#[^\|]+)?(\|.*)?$',contents)
+    if m is None: # no contents
+        stream.idx = startidx
+        return False
+    
+    label = m[1] if not m[1] is None else ''
+    heading = m[2] if not m[2] is None else ''
+    content = m[3][1:] if not m[3] is None else m[0]
+    if label == '': # internal heading link, no need to do more
+        # remove nodes from out:
+        return (f'<a href="{heading}"' +  
+        f'>{content[1:]}</a>')
+
+    # else check for link:
+    for l in link_references:
+        if label_collapse(label) == l['label']:
+            if not 'wiki' in l.keys(): continue
+            if l['title'] != '': title = l['title']
+            dest = l['dest']
+            break # matching found
+    else:
+        # no matching link reference, i.e. invalid reference
+        stream.idx = startidx
+        return False
+    
+    # now do much the same as inline links:
+
+    dest = sanitize_text(dest, replace_dangerous=False)
+    # more sanitizing for URI specifically:
+    dest = URI_sanitize(dest)
+    if heading != '': dest += heading
+
+    # if embed, the "content should be parsed as a size determiner"
+    if embed:
+        m = re.match(r'([0-9]+)([Xx][0-9]+)?$', content)
+        if not m is None:
+            width = int(m[1])
+            height = int(m[2][1:]) if not m[2] is None else ''
+        else: width = height = ''
+
+    # add link to out:
+    if embed: # image
+        return(f'<img src="{dest}"' + f' alt="{content}"'+ 
+               (f' width="{width}"'if width != '' else '') + 
+               (f' height="{height}"'if height != '' else '') + 
+            ' />')
+    else:
+        return(f'<a href="{dest}"' + 
+            f'>{content}</a>')
+
+
 
 def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, delimeter_stack:list[dict])->str|bool|list[str]:
     '''read character, if it starts link, return a link string
@@ -441,77 +520,43 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
     if not c in ('[','!', ']'): return False
     # this one's a doosey
 
-    # check for `![`, `]]`, and `[[`:
-    d = stream.read(1)
-    if d == '[' and c == '!':
+    # check for `![`:
+    if stream.read(1) == '[' and c == '!':
         c = '!['
-    elif d == '[' and c == '[':
-        c = '[['
-    elif d == ']' and c == ']':
-        c = ']]'
     else:
         stream.move(-1)
     
-    if c in ('[', '![', '[['):
+    if c in ('[', '!['):
         # start of link
         delimeter_stack.append({
             "type": c,
             'active':True,
             "dir": 0, # irrelevant for links
             "length":0, # ---||---
-            "idx": len(out), # place in out where it is
-            'wiki': (c == '[[')
+            "idx": len(out) # place in out where it is
         })
         return c
     # else, close the link
     for delim in delimeter_stack[::-1]:
-        if delim['type'] not in ('[', '![', '[['): continue
+        if delim['type'] not in ('[', '!['): continue
         # found one!
         if not delim['active']:
             # inactive, remove and insert literal
             delimeter_stack.remove(delim)
             return c
-        if (c == ']]') != (delim['wiki']):
-            # wrong type, continue
-            continue
-
         # now we get to the complicated stuff!
         
 
         link_content = "".join(out[delim['idx']:])[len(delim['type']):]
         # value inside brackets
-
-        
-
         
 
         # check if inline, reference, collapsed, or shortcut
         # if it is we define content and (label or title/dest)
-        content = ''; label = ''; title = ''; dest = ''; heading = '' # zero out label, content, title, & dest
+        content = ''; label = ''; title = ''; dest = '' # zero out label, content, title, & dest
         linktype = 'none'
-
-        # deal with wikilink:
-        if delim['wiki']:
-            # same logic as shortcut, but with extra parsing
-            m = re.match(r'([^#]+)#?([^\|]+)(.*)$',link_content)
-            if m is None:
-                # bad wiki, treat as inactive
-                delimeter_stack.remove(delim)
-                return c
-            label = m[1]
-            heading = m[2]
-            content = m[3] if m[3] != '' else m[0]
-            if label == '': # internal heading link, no need to do more
-                out.append(f'<a href="{'#'+heading}"' +  
-                f'>{content}</a>')
-                return out
-            # else:
-            linktype = 'wiki'
-
-        if linktype != 'wiki':
-            buf = [stream.read(1)]
-        else: buf = []
-        for _ in ([1] if linktype != 'wiki' else []): # for control flow, so we can break out
+        buf = [stream.read(1)]
+        for _ in [1]: # for control flow, so we can break out
             match buf[0]:
 
                 case '[':
@@ -634,6 +679,7 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
         if linktype != 'inline':
             for l in link_references:
                 if label_collapse(label) == l['label']:
+                    if 'wiki' in l.keys(): continue
                     if l['title'] != '': title = l['title']
                     dest = l['dest']
                     break # matching found
@@ -651,7 +697,6 @@ def parse_inline_links(stream:fakestream,out:list[str], c:str, link_references, 
         dest = sanitize_text(dest, replace_dangerous=False)
         # more sanitizing for URI specifically:
         dest = URI_sanitize(dest)
-        if heading != '': dest += '#' + heading
 
         # contents should be parsed as inline, and 
         # delimeters contained within should be removed.
