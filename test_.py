@@ -93,6 +93,6 @@ def test_wikilinks4():
 if __name__ == "__main__":
 
     # test individual test:
-    id = 656
+    id = 658
     test_check(spec[id])
 

@@ -1362,6 +1362,8 @@ class Table(Block):
                 Block.current_line = ''
             return True
         else: # in subsequent rows (non piped row assumed to be single entry):
+            # check if it acually is a followup:
+            if not '|' in Block.current_line: return False
             # fill in rows
             cells = re.split(SPLIT_ON, Block.current_line.rstrip('\n'))
             cells[0] = cells[0].lstrip('|')
