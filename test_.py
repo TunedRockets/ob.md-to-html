@@ -7,9 +7,11 @@ sys.path.append(directory)
 
 from src.parser import parse_md
 from src.utils import label_collapse
+from src.parser_settings import *
 import json
 from io import StringIO
 import pytest
+
 
 EXCLUDED = [608, 611, 612, 1624]
 
@@ -87,6 +89,16 @@ def test_wikilinks4():
     link_refs = [link]
     html = '<p>finally wikilinks can have <a href="/uri">alternate names</a></p>'
     guess = parse_md(StringIO(md), link_references=link_refs)
+    assert guess.strip() == html.strip()
+
+
+def test_callout():
+    md = '>[!info] callout\n>This is a callout'
+
+    html = CALLOUT_DIV.format(type='info',fold='') + '\n' + CALLOUT_HEAD + '\ncallout\n' + CALLOUT_HEAD_N
+    html += '\n' + CALLOUT_CONT + '\n<p>This is a callout</p>\n' + CALLOUT_CONT_N +  '\n' + CALLOUT_DIV_N
+
+    guess = parse_md(StringIO(md))
     assert guess.strip() == html.strip()
 
 

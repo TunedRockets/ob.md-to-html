@@ -11,15 +11,15 @@ The following extras will be supported:
 - [x][x] autolink extension
     this means that CM example 608,611, and 612 are invalid (so were removed)
     GFM test 624 i disagree with, so it's excluded as well
-- [x][] wikilinks (with alias and paragraph linking)
+- [x][x] wikilinks (with alias and paragraph linking)
     to implement this, the preprocessor should add all wikilinks as link-labels before parsing
     it should also make link-labels for all headings to allow heading linking.
     finally wikiformat should recognize `|` as a custom name indicator.
     a duplicate of all labels with .md added should also be added to comply with regular markdown formatted links.
-- [][] wiki-like embedded images
+- [][x] wiki-like embedded images
     embedded images should see `|` to specify width and height
 - [][] footnotes
-- [][] callouts
+- [x][x] callouts
 - [x][x] comments
     inline comments and block comments are replaced by their HTML counterparts,
     inline is indicated by `%%` and block is indicated by `%%\n`. they are replaced by `<!--` and `-->`

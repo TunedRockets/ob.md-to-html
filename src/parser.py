@@ -748,13 +748,73 @@ class Block_quote(Block):
             return False
     
     def realize(self) -> str:
-        res = "<blockquote>\n"
-        for child in self.children:
-            s = child.realize()
-            if s != '': # skip empty realizations
-                res += s + '\n'
-        return res + "</blockquote>"
+        
+        if t := self.is_callout(): # type:ignore
+            t:tuple
+            res = CALLOUT_DIV.format(type=t[0], fold=t[2]) + '\n' + CALLOUT_HEAD + '\n'
+            res += t[1] + '\n' + CALLOUT_HEAD_N + '\n' + CALLOUT_CONT + '\n'
+
+
+            for child in self.children:
+                s = child.realize()
+                if s != '': # skip empty realizations
+                    res += s + '\n'
+            return res + CALLOUT_CONT_N + '\n' + CALLOUT_DIV_N
+
+
+        else:
+            res = "<blockquote>\n"
+            for child in self.children:
+                s = child.realize()
+                if s != '': # skip empty realizations
+                    res += s + '\n'
+            return res + "</blockquote>"
    
+
+    def is_callout(self)->bool|tuple:
+        '''check for callout and apply if appropriate'''
+
+        '''
+        Callouts are block-quotes where the first line starts with `[!info]` or another type identifier,
+        if a block quote is recognized as a callout, it will not be inside `<blockquote>` tags, but rather inside:
+        <div class="callout" identifier="info">
+            <div class="callout-header">
+            ...
+            </div>
+            <div class="callout-container">
+            ...
+            </div>
+        </div>
+        where the first row is inside the header and the rest is in the container.
+
+        to support folding, add folded="true" or folded="false" to the callout div.
+        if the character following the type identifier is a + or -
+        (to be implemented later)
+        '''
+        if isinstance(self.children[0], Paragraph): # check for callout
+            first_line = self.children[0].contents.split('\n')[0]
+            m = re.match(r'^[\s]*\[!([\w]+)\](\+|-)?[\s]+', first_line)
+            if m is None: return False
+            # else:
+            typeid = m[1]
+            fold = m[2]
+            if fold == '-': fold = ' folded="true"'
+            if fold == '+': fold = ' folded="false"'
+            if fold is None: fold=''
+            header = first_line[len(m[0]):]
+            if not typeid is None:
+                self.children[0].contents = self.children[0].contents[len(first_line):]
+                return typeid, header, fold
+            else: return False
+
+        else: return False
+            
+
+
+
+
+
+
 class Fenced_code_block(Block):
 
     parse_verbatim:bool = True
